@@ -47,6 +47,10 @@ public final class ScreenshotTour {
             return;
         }
         if (forceHurt && mc.thePlayer != null) mc.thePlayer.hurtTime = 8;
+        if (tagged != null) { // the player may be up in the air: keep the test villager from falling away
+            tagged.setPosition(tagX, tagY, tagZ);
+            tagged.motionX = tagged.motionY = tagged.motionZ = 0;
+        }
         if (mc.thePlayer == null || benching || wait-- > 0) return;
         try {
             advance();
@@ -238,7 +242,54 @@ public final class ScreenshotTour {
         }
     }
 
+    private net.minecraft.entity.Entity tagged;
+    private double tagX, tagY, tagZ;
+
+    /** CLIENTM_TOUR=nametag: a named villager seen as vanilla, with Textured Backgrounds, then with the box hidden. */
+    private void nametagTest() {
+        wait = 40;
+        Module m = module("texturedbg");
+        switch (step++) {
+            case 0:
+                net.minecraft.world.WorldServer world = mc.getIntegratedServer().worldServers[0];
+                world.setWorldTime(6000L);
+                m.setEnabled(false);
+                mc.thePlayer.rotationPitch = mc.thePlayer.prevRotationPitch = 0f;
+                net.minecraft.util.Vec3 look = mc.thePlayer.getLookVec();
+                net.minecraft.entity.passive.EntityVillager v = new net.minecraft.entity.passive.EntityVillager(world);
+                v.setCustomNameTag("Nametag Test");
+                v.setAlwaysRenderNameTag(true);
+                tagX = mc.thePlayer.posX + look.xCoord * 3;
+                tagY = mc.thePlayer.boundingBox.minY - 1;
+                tagZ = mc.thePlayer.posZ + look.zCoord * 3;
+                v.setPosition(tagX, tagY, tagZ);
+                world.spawnEntityInWorld(v);
+                tagged = v;
+                break;
+            case 1:
+                shot("nametag-1-vanilla");
+                m.setEnabled(true);
+                break;
+            case 2:
+                shot("nametag-2-textured");
+                for (com.clientm.setting.Setting s : m.settings)
+                    if (s.id.equals("hideNametagBox")) ((com.clientm.setting.BoolSetting) s).value = true;
+                break;
+            default:
+                shot("nametag-3-box-hidden");
+                for (com.clientm.setting.Setting s : m.settings)
+                    if (s.id.equals("hideNametagBox")) ((com.clientm.setting.BoolSetting) s).value = false;
+                m.setEnabled(false);
+                tagged.setDead();
+                mc.shutdown();
+        }
+    }
+
     private void advance() {
+        if ("nametag".equals(System.getenv("CLIENTM_TOUR"))) {
+            nametagTest();
+            return;
+        }
         if ("world".equals(System.getenv("CLIENTM_TOUR"))) {
             worldTest();
             return;

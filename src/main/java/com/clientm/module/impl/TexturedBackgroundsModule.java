@@ -6,9 +6,11 @@ import org.lwjgl.opengl.GL11;
 
 import com.clientm.module.Category;
 import com.clientm.module.Module;
+import com.clientm.setting.BoolSetting;
 
 /**
- * Draws flat background boxes (scoreboard, chat, HUD module backgrounds) as a tinted 1x1 white texture instead of
+ * Draws flat background boxes (scoreboard, chat, nametags, HUD module backgrounds) as a tinted 1x1 white texture
+ * instead of
  * switching texturing off and on around each one. Keeping texturing on avoids a render-state change per box. The
  * colour still comes from the caller, so nothing looks different.
  *
@@ -20,6 +22,8 @@ public class TexturedBackgroundsModule extends Module {
     private static DynamicTexture white;
     private static int previousTexture;
     private static boolean active;
+
+    private final BoolSetting hideNametagBox = add(new BoolSetting("hideNametagBox", "Hide nametag box", false));
 
     public TexturedBackgroundsModule() {
         super("texturedbg", "Textured Backgrounds", Category.PERFORMANCE, false);
@@ -46,7 +50,16 @@ public class TexturedBackgroundsModule extends Module {
         active = true;
     }
 
-    /** Called when drawRect returns: put back whatever texture the caller had bound. */
+    /** True when the dark box behind a nametag should not be drawn at all. */
+    public static boolean skipNametagBox() {
+        TexturedBackgroundsModule m = instance;
+        return m != null && m.enabled && m.hideNametagBox.value;
+    }
+
+    /**
+     * Called when drawRect returns, or right after a nametag box is drawn: put back whatever texture the caller had
+     * bound.
+     */
     public static void end() {
         if (!active) return;
         active = false;
