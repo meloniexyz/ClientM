@@ -13,6 +13,7 @@
     "MixinItemRenderer_GlintColor",
     "MixinRenderItem_GlintColor",
     "MixinRendererLivingEntity_GlintColor",
+    "MixinRendererLivingEntity_HitColour",
     "MixinGui_TexturedRect"
   ],
   "server": []

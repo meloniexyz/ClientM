@@ -12,3 +12,12 @@ configurations.configureEach {
         }
     }
 }
+
+// Shader compilers that Angelica's experimental Vulkan / Direct3D 12 renderer needs. Only used by the Java 21
+// dev launch (runClient21) when that renderer is switched on.
+dependencies {
+    lwjgl3Classpath("org.lwjgl:lwjgl-shaderc:3.4.2")
+    lwjgl3Classpath("org.lwjgl:lwjgl-shaderc:3.4.2:natives-windows")
+    lwjgl3Classpath("org.lwjgl:lwjgl-spvc:3.4.2")
+    lwjgl3Classpath("org.lwjgl:lwjgl-spvc:3.4.2:natives-windows")
+}

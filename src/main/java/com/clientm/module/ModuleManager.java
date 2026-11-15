@@ -28,6 +28,7 @@ import com.clientm.module.impl.CoordinatesModule;
 import com.clientm.module.impl.CpsModule;
 import com.clientm.module.impl.FpsModule;
 import com.clientm.module.impl.GlintModule;
+import com.clientm.module.impl.HitColourModule;
 import com.clientm.module.impl.HudCachingModule;
 import com.clientm.module.impl.KeystrokesModule;
 import com.clientm.module.impl.PerformanceModule;
@@ -74,6 +75,7 @@ public class ModuleManager {
         register(new ArmourStatusModule());
         register(new ToggleSprintModule());
         register(new GlintModule());
+        register(new HitColourModule());
         register(new PerformanceModule());
         register(new HudCachingModule());
         register(new ChunkLoadingModule());

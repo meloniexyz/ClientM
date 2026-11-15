@@ -26,7 +26,7 @@ public final class ScreenshotTour {
     private final Minecraft mc = Minecraft.getMinecraft();
     private boolean launched;
     private int step;
-    private int wait = 140;
+    private int wait = "bench".equals(System.getenv("CLIENTM_TOUR")) ? 400 : 140;
     private ClientScreen screen;
 
     public static boolean requested() {
@@ -40,7 +40,8 @@ public final class ScreenshotTour {
             if (mc.currentScreen instanceof GuiMainMenu) launchFirstWorld();
             return;
         }
-        if (mc.thePlayer == null || wait-- > 0) return;
+        if (forceHurt && mc.thePlayer != null) mc.thePlayer.hurtTime = 8;
+        if (mc.thePlayer == null || benching || wait-- > 0) return;
         try {
             advance();
         } catch (Throwable t) {
@@ -100,7 +101,98 @@ public final class ScreenshotTour {
         module("texturedbg").setEnabled(n % 2 == 0);
     }
 
+    // ---- CLIENTM_TOUR=bench: spin the camera once over 20 seconds and record every frame time.
+    private boolean benching;
+    private long benchStart, lastFrame;
+    private float baseYaw;
+    private final int[] frameNanos = new int[400000];
+    private int frames;
+
+    @SubscribeEvent
+    public void onRender(TickEvent.RenderTickEvent event) {
+        if (!benching || event.phase != TickEvent.Phase.START || mc.thePlayer == null) return;
+        long now = System.nanoTime();
+        if (benchStart == 0) {
+            benchStart = now;
+            lastFrame = now;
+            baseYaw = mc.thePlayer.rotationYaw;
+            return;
+        }
+        if (frames < frameNanos.length) frameNanos[frames++] = (int) Math.min(Integer.MAX_VALUE, now - lastFrame);
+        lastFrame = now;
+        float secs = (now - benchStart) / 1e9f;
+        mc.thePlayer.rotationYaw = mc.thePlayer.prevRotationYaw = baseYaw + secs * 18f;
+        mc.thePlayer.rotationPitch = mc.thePlayer.prevRotationPitch = 10f;
+        if (secs >= 20f) finishBench(secs);
+    }
+
+    private void finishBench(float secs) {
+        benching = false;
+        int[] sorted = java.util.Arrays.copyOf(frameNanos, frames);
+        java.util.Arrays.sort(sorted);
+        String line = String.format(
+            java.util.Locale.ROOT,
+            "%-28s java %-10s avg %7.1f fps   1%% low %7.1f   0.1%% low %7.1f   worst frame %5.1f ms   frames %d",
+            String.valueOf(System.getenv("CLIENTM_BENCH_LABEL")),
+            System.getProperty("java.version"),
+            frames / secs,
+            lowFps(sorted, 0.01),
+            lowFps(sorted, 0.001),
+            sorted[frames - 1] / 1e6,
+            frames);
+        ClientM.LOG.info("Benchmark: {}", line);
+        try {
+            java.nio.file.Files.write(
+                new java.io.File(mc.mcDataDir, "clientm-bench.txt").toPath(),
+                (line + System.lineSeparator()).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND);
+        } catch (java.io.IOException e) {
+            ClientM.LOG.error("Could not write benchmark result", e);
+        }
+        mc.shutdown();
+    }
+
+    /** FPS of the slowest share of frames (0.01 = the "1% low"). */
+    private static double lowFps(int[] sorted, double share) {
+        int n = Math.max(1, (int) (sorted.length * share));
+        long sum = 0;
+        for (int i = sorted.length - n; i < sorted.length; i++) sum += sorted[i];
+        return 1e9 / (sum / (double) n);
+    }
+
+    /** CLIENTM_TOUR=hit: third-person view of the player mid-hit, with a green hit colour, then one picture. */
+    private void hitTest() {
+        wait = 40;
+        if (step++ == 0) {
+            if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            Module m = module("hitcolour");
+            for (com.clientm.setting.Setting s : m.settings) {
+                if (s instanceof com.clientm.setting.IntSetting) ((com.clientm.setting.IntSetting) s)
+                    .set(s.id.equals("green") ? 255 : s.id.equals("strength") ? 60 : 0);
+            }
+            m.setEnabled(true);
+            mc.gameSettings.thirdPersonView = 2;
+            forceHurt = true;
+            return;
+        }
+        shot("hit-colour");
+        mc.gameSettings.thirdPersonView = 0;
+        mc.shutdown();
+    }
+
+    private boolean forceHurt;
+
     private void advance() {
+        if ("hit".equals(System.getenv("CLIENTM_TOUR"))) {
+            hitTest();
+            return;
+        }
+        if ("bench".equals(System.getenv("CLIENTM_TOUR"))) {
+            if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            benching = true;
+            return;
+        }
         if ("diag".equals(System.getenv("CLIENTM_TOUR"))) {
             diagnose();
             return;
