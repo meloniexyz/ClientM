@@ -87,6 +87,18 @@ public final class AngelicaBridge {
         }
     }
 
+    /** Switches Angelica's VSync off right now and stores that choice. */
+    public static void vsyncOff() {
+        if (!Loader.isModLoaded("angelica")) return;
+        try {
+            Class.forName("com.gtnewhorizons.angelica.proxy.ClientProxy")
+                .getMethod("toggleVSync", boolean.class)
+                .invoke(null, false);
+        } catch (Throwable t) {
+            ClientM.LOG.warn("Could not switch Angelica's VSync off: {}", t.toString());
+        }
+    }
+
     public static void save() {
         if (!available()) return;
         try {
