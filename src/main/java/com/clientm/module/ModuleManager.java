@@ -23,6 +23,7 @@ import com.clientm.ClientM;
 import com.clientm.compat.PerformancePreset;
 import com.clientm.gui.ClientScreen;
 import com.clientm.module.impl.ArmourStatusModule;
+import com.clientm.module.impl.CentredInventoryModule;
 import com.clientm.module.impl.ChunkLoadingModule;
 import com.clientm.module.impl.ClearGlassModule;
 import com.clientm.module.impl.CoordinatesModule;
@@ -37,6 +38,7 @@ import com.clientm.module.impl.LazyChunksModule;
 import com.clientm.module.impl.NoFogModule;
 import com.clientm.module.impl.PerformanceModule;
 import com.clientm.module.impl.PotionStatusModule;
+import com.clientm.module.impl.ScoreboardModule;
 import com.clientm.module.impl.TexturedBackgroundsModule;
 import com.clientm.module.impl.ToggleSprintModule;
 import com.clientm.setting.BoolSetting;
@@ -77,6 +79,7 @@ public class ModuleManager {
         register(new KeystrokesModule());
         register(new PotionStatusModule());
         register(new ArmourStatusModule());
+        register(new ScoreboardModule());
         register(new ToggleSprintModule());
         register(new GlintModule());
         register(new HitColourModule());
@@ -88,6 +91,7 @@ public class ModuleManager {
         register(new ChunkLoadingModule());
         register(new TexturedBackgroundsModule());
         register(new ClearGlassModule());
+        register(new CentredInventoryModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()

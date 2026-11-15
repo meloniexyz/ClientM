@@ -320,7 +320,54 @@ public final class ScreenshotTour {
 
     private int glassX, glassY, glassZ;
 
+    /** CLIENTM_TOUR=hud2: potion effects and a sidebar scoreboard on the HUD, then the inventory. */
+    private void hudTest() {
+        wait = 40;
+        net.minecraft.server.MinecraftServer server = mc.getIntegratedServer();
+        net.minecraft.entity.player.EntityPlayerMP p = (net.minecraft.entity.player.EntityPlayerMP) server
+            .getConfigurationManager().playerEntityList.get(0);
+        net.minecraft.scoreboard.Scoreboard board = server.worldServers[0].getScoreboard();
+        switch (step++) {
+            case 0:
+                server.worldServers[0].setWorldTime(6000L);
+                p.addPotionEffect(new net.minecraft.potion.PotionEffect(1, 1800, 1));
+                p.addPotionEffect(new net.minecraft.potion.PotionEffect(5, 600, 0));
+                p.addPotionEffect(new net.minecraft.potion.PotionEffect(12, 4800, 0));
+                if (board.getObjective("clientmtest") != null) board.func_96519_k(board.getObjective("clientmtest"));
+                net.minecraft.scoreboard.ScoreObjective o = board
+                    .addScoreObjective("clientmtest", net.minecraft.scoreboard.IScoreObjectiveCriteria.field_96641_b);
+                o.setDisplayName("\u00a7b\u00a7lPractice");
+                String[] rows = { "\u00a7fOnline: \u00a7b148", "\u00a7fFighting: \u00a7b62",
+                    "\u00a77play.example.net" };
+                for (int i = 0; i < rows.length; i++) board.func_96529_a(rows[i], o)
+                    .setScorePoints(rows.length - i);
+                board.func_96530_a(1, o);
+                for (HudModule h : ClientM.modules.hud()) h.setEnabled(false);
+                module("fps").setEnabled(true);
+                module("potions").setEnabled(true);
+                module("scoreboard").setEnabled(false);
+                break;
+            case 1:
+                shot("hud2-1-vanilla-scoreboard");
+                module("scoreboard").setEnabled(true);
+                break;
+            case 2:
+                shot("hud2-2-scoreboard-mod");
+                mc.displayGuiScreen(new net.minecraft.client.gui.inventory.GuiInventory(mc.thePlayer));
+                break;
+            default:
+                shot("hud2-3-inventory");
+                board.func_96519_k(board.getObjective("clientmtest"));
+                p.clearActivePotions();
+                mc.shutdown();
+        }
+    }
+
     private void advance() {
+        if ("hud2".equals(System.getenv("CLIENTM_TOUR"))) {
+            hudTest();
+            return;
+        }
         if ("glass".equals(System.getenv("CLIENTM_TOUR"))) {
             glassTest();
             return;
