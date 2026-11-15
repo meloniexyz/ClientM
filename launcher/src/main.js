@@ -5,6 +5,7 @@ const auth = require('./auth');
 const { install } = require('./install');
 const { launch } = require('./launch');
 const manifest = require('../manifest.json');
+const { autoUpdater } = require('electron-updater');
 
 const userData = app.getPath('userData'); // %APPDATA%\ClientM
 const root = path.join(userData, 'minecraft');
@@ -131,6 +132,41 @@ ipcMain.handle('open-url', (e, url) => {
   if (/(^|\.)microsoft\.com$|(^|\.)microsoftonline\.com$|(^|\.)live\.com$/.test(host)) return shell.openExternal(url);
 });
 
+// ---------------------------------------------------------------- updates
+
+// New versions come from the GitHub releases of meloniexyz/ClientM. The installer is downloaded in the
+// background; the window then offers a restart, and it is also applied the next time the launcher closes.
+let updateReady = null;
+
+function startUpdater() {
+  if (!app.isPackaged) return;
+  const logFile = path.join(userData, 'updater.log');
+  const write = (level) => (msg) => {
+    try {
+      fs.appendFileSync(logFile, `${new Date().toISOString()} ${level} ${msg && msg.stack ? msg.stack : msg}
+`);
+    } catch (e) {
+      // logging must never break the launcher
+    }
+  };
+  autoUpdater.logger = { info: write('info'), warn: write('warn'), error: write('error'), debug: () => {} };
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('update-available', (info) => send('update', { stage: 'downloading', version: info.version }));
+  autoUpdater.on('update-downloaded', (info) => {
+    updateReady = info.version;
+    send('update', { stage: 'ready', version: info.version });
+  });
+  autoUpdater.on('error', () => {}); // already written to updater.log; never bother the user with it
+  autoUpdater.checkForUpdates().catch(() => {});
+}
+
+ipcMain.handle('update-state', () => (updateReady ? { stage: 'ready', version: updateReady } : null));
+
+ipcMain.handle('update-install', () => {
+  if (updateReady && !game) autoUpdater.quitAndInstall(true, true);
+});
+
 // ---------------------------------------------------------------- window
 
 app.whenReady().then(() => {
@@ -145,6 +181,7 @@ app.whenReady().then(() => {
   });
   win.removeMenu();
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
+  win.webContents.once('did-finish-load', startUpdater);
 
   // Developer aid: CLIENTM_LAUNCHER_SHOT=<file.png> saves a picture of the window and quits.
   const shot = process.env.CLIENTM_LAUNCHER_SHOT;

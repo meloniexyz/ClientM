@@ -103,4 +103,18 @@ api.on('game-exit', async (d) => {
   status(d.error ? 'Could not start Java: ' + d.error : d.code ? 'Minecraft closed with an error (code ' + d.code + '). See launcher-game.log in the game folder.' : '', !!(d.error || d.code));
 });
 
+function showUpdate(u) {
+  if (!u) return;
+  const b = $('updateBtn');
+  b.hidden = false;
+  b.disabled = u.stage !== 'ready';
+  b.textContent = u.stage === 'ready' ? 'Restart to update to ' + u.version : 'Downloading update ' + u.version + '…';
+}
+api.on('update', showUpdate);
+api.updateState().then(showUpdate);
+$('updateBtn').onclick = () => {
+  if (st.running) return status('Close Minecraft first, then restart to update.', true);
+  api.installUpdate();
+};
+
 refresh();

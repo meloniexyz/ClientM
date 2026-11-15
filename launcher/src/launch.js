@@ -24,7 +24,7 @@ function launch(inst, account, opts) {
     natives_directory: inst.nativesDir,
     classpath: inst.classpath.join(path.delimiter),
     launcher_name: 'ClientM',
-    launcher_version: '0.1.0',
+    launcher_version: require('../package.json').version,
     library_directory: path.dirname(inst.nativesDir) + path.sep + 'libraries',
     classpath_separator: path.delimiter,
     auth_player_name: account.name,

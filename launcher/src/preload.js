@@ -9,7 +9,9 @@ contextBridge.exposeInMainWorld('launcher', {
   play: () => ipcRenderer.invoke('play'),
   openFolder: () => ipcRenderer.invoke('open-folder'),
   openUrl: (url) => ipcRenderer.invoke('open-url', url),
+  updateState: () => ipcRenderer.invoke('update-state'),
+  installUpdate: () => ipcRenderer.invoke('update-install'),
   on: (channel, fn) => {
-    if (['login-code', 'progress', 'game-exit'].includes(channel)) ipcRenderer.on(channel, (e, data) => fn(data));
+    if (['login-code', 'progress', 'game-exit', 'update'].includes(channel)) ipcRenderer.on(channel, (e, data) => fn(data));
   },
 });
