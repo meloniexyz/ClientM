@@ -1,0 +1,14 @@
+// Performance stack ClientM ships with. Present in runClient, not baked into our jar.
+dependencies {
+    runtimeOnlyNonPublishable("com.github.GTNewHorizons:Angelica:2.2.46:dev")
+    runtimeOnlyNonPublishable("com.github.GTNewHorizons:Hodgepodge:2.7.197:dev")
+}
+
+// Windows Defender quarantines GTNHExtLib 1.0.4 (pulled in via GTNHLib) on download; use the newer release.
+configurations.configureEach {
+    resolutionStrategy.eachDependency { details ->
+        if (details.requested.group == 'com.github.GTNewHorizons' && details.requested.name == 'GTNHExtLib') {
+            details.useVersion('1.1.0')
+        }
+    }
+}

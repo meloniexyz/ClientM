@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.clientm.mixins",
+  "refmap": "mixins.clientm.refmap.json",
+  "target": "@env(DEFAULT)",
+  "compatibilityLevel": "JAVA_8",
+  "mixins": [],
+  "client": [
+    "MixinItemStack",
+    "MixinRenderPlayer",
+    "MixinRenderBiped",
+    "MixinItemRenderer_GlintColor",
+    "MixinRenderItem_GlintColor",
+    "MixinRendererLivingEntity_GlintColor",
+    "MixinGui_TexturedRect"
+  ],
+  "server": []
+}
