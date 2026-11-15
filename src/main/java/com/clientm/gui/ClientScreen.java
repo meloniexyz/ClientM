@@ -5,12 +5,13 @@ import java.util.List;
 
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.gui.ScaledResolution;
 
-import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
 
 import com.clientm.ClientM;
+import com.clientm.compat.PerformancePreset;
 import com.clientm.module.Category;
 import com.clientm.module.HudModule;
 import com.clientm.module.Module;
@@ -20,66 +21,103 @@ import com.clientm.setting.IntSetting;
 import com.clientm.setting.Setting;
 
 /**
- * The whole ClientM interface in one screen. It opens as the HUD editor (drag modules around) with a Mods button in
- * the middle; that opens a card grid of modules by category, and each card's Options button opens its settings page.
- * Escape steps back one level.
+ * The whole ClientM interface in one screen. The game stays visible and every HUD module can be dragged at any time.
+ * In the middle sit the name, a row of three buttons and one panel: a list of mods on the left, the picked mod's
+ * options on the right. The video presets are a row of chips under the panel.
  */
 public class ClientScreen extends GuiScreen {
 
-    private enum View {
-        EDIT,
-        MODS,
-        SETTINGS
-    }
+    private static final int BG = 0xE6000000;
+    private static final int LINE = 0xFF22222C;
+    private static final int ROW_BG = 0xFF111116;
+    private static final int HOVER = 0x18FFFFFF;
+    private static final int TEXT = 0xEDEDF2;
+    private static final int TEXT_2 = 0xA3A3B2;
+    private static final int TEXT_3 = 0x6C6C7C;
+    private static final int ACCENT = 0xFFFF4D5E;
+    private static final int ACCENT_TINT = 0x38FF4D5E;
+    private static final int PRESET = 0xFFA99DFF;
+    private static final int INK = 0x0C0A18;
+    private static final int SWITCH_OFF = 0xFF3A3A46;
 
-    private static final int ACCENT = 0xFFE0A526;
-    private static final int PANEL = 0xF0121318;
-    private static final int HEADER = 0xFF1B1D25;
-    private static final int CARD = 0xFF22252F;
-    private static final int CARD_HOVER = 0xFF2B2F3C;
-    private static final int ON = 0xFF2E9E4F;
-    private static final int OFF = 0xFF8A3030;
-    private static final int NEUTRAL = 0xFF3A3F50;
-
-    private static final int PANEL_W = 384;
-    private static final int PANEL_H = 236;
-    private static final int HEADER_H = 26;
-    private static final int COLS = 3;
-    private static final int GAP = 6;
-    private static final int CARD_H = 56;
-    private static final int ROW = 20;
-    private static final int SLIDER_W = 110;
+    private static final int RAIL_W = 96;
+    private static final int RAIL_ROW = 13;
+    private static final int ROW = 17;
+    private static final int SLIDER_W = 84;
+    private static final int BTN_H = 18;
+    private static final int MODS_W = 76;
+    private static final int CHIP_H = 14;
     private static final int MIN_W = 60;
     private static final int MIN_H = 14;
 
-    private static Category selected = Category.HUD;
+    private static final String HINT = "Drag a HUD box to move it   Right-click: on/off   Middle-click: background";
 
-    private View view = View.EDIT;
-    private long viewSince;
-    private Module settingsOf;
-    private int scroll;
+    // Remembered between openings
+    private static String selectedId = "fps";
+    private static boolean panelOpen = true;
 
-    private final List<Module> cards = new ArrayList<>();
+    private Module selected;
+    private long openedAt;
+    private int railScroll, listScroll;
+
+    /** Left list: a Category (heading) or a Module per row. */
+    private final List<Object> rail = new ArrayList<>();
+    private final PerformancePreset[] presets = PerformancePreset.values();
+    private final int[] chipX = new int[presets.length + 1];
+
+    // Smooth menu text; the HUD boxes keep Minecraft's font
+    private SmoothFont f, bold, logo;
 
     private HudModule dragging;
     private int dragOffX, dragOffY;
     private IntSetting sliding;
 
-    // Panel geometry, recomputed in initGui
-    private int px, py, bodyX, bodyY, bodyW, bodyH, cardW;
+    // Geometry, recomputed in initGui
+    private int logoY, btnY, sx, sy, sw, sh, railY, railH, lx, lw, bodyY, bodyH, chipY;
 
     @Override
     public void initGui() {
         ClientM.modules.editing = true;
-        px = (width - PANEL_W) / 2;
-        py = (height - PANEL_H) / 2;
-        bodyX = px + 8;
-        bodyY = py + HEADER_H + 22;
-        bodyW = PANEL_W - 16;
-        bodyH = PANEL_H - HEADER_H - 30;
-        cardW = (bodyW - GAP * (COLS - 1)) / COLS;
-        if (viewSince == 0) viewSince = System.currentTimeMillis();
-        rebuildCards();
+        int scale = new ScaledResolution(mc, mc.displayWidth, mc.displayHeight).getScaleFactor();
+        f = SmoothFont.get(scale, 9, false);
+        bold = SmoothFont.get(scale, 9, true);
+        logo = SmoothFont.get(scale, 18, true);
+        sw = Math.min(330, width - 16);
+        sh = Math.min(156, height - 78);
+        int total = 16 + 4 + BTN_H + 5 + sh + 5 + CHIP_H;
+        logoY = (height - total) / 2;
+        btnY = logoY + 20;
+        sx = (width - sw) / 2;
+        sy = btnY + BTN_H + 5;
+        railY = sy + 5;
+        railH = sh - 10;
+        lx = sx + RAIL_W + 7;
+        lw = sx + sw - 9 - lx;
+        bodyY = sy + 24;
+        bodyH = sh - 29;
+        chipY = sy + sh + 5;
+
+        int w = 0;
+        for (PerformancePreset p : presets) w += f.width(p.label) + 12 + 3;
+        int x = (width - w + 3) / 2;
+        for (int i = 0; i < presets.length; i++) {
+            chipX[i] = x;
+            x += f.width(presets[i].label) + 12 + 3;
+        }
+        chipX[presets.length] = x;
+
+        rail.clear();
+        for (Category c : Category.values()) {
+            rail.add(c);
+            for (Module m : ClientM.modules.all()) if (m.category == c) rail.add(m);
+        }
+        if (selected == null) {
+            for (Module m : ClientM.modules.all()) if (m.id.equals(selectedId)) selected = m;
+            if (selected == null) selected = ClientM.modules.all()
+                .get(0);
+        }
+        if (openedAt == 0) openedAt = System.currentTimeMillis();
+        clampScroll();
     }
 
     @Override
@@ -93,30 +131,31 @@ public class ClientScreen extends GuiScreen {
         return false;
     }
 
-    private void show(View v) {
-        view = v;
-        viewSince = System.currentTimeMillis();
-        scroll = 0;
-        dragging = null;
+    private void select(Module m) {
+        selected = m;
+        selectedId = m.id;
+        listScroll = 0;
         sliding = null;
+        panelOpen = true;
     }
 
-    /** Jumps straight to a category's module cards. */
+    /** Opens the panel on the first mod of a category. */
     public void showMods(Category category) {
-        selected = category;
-        rebuildCards();
-        show(View.MODS);
+        for (Module m : ClientM.modules.all()) {
+            if (m.category == category) {
+                select(m);
+                railScroll = Math.max(0, (rail.indexOf(m) - 1) * RAIL_ROW);
+                clampScroll();
+                return;
+            }
+        }
     }
 
-    /** Jumps straight to one module's options page. */
+    /** Opens the panel on one mod's options. */
     public void showSettings(Module module) {
-        settingsOf = module;
-        show(View.SETTINGS);
-    }
-
-    private void rebuildCards() {
-        cards.clear();
-        for (Module m : ClientM.modules.all()) if (m.category == selected) cards.add(m);
+        select(module);
+        railScroll = Math.max(0, (rail.indexOf(module) - 3) * RAIL_ROW);
+        clampScroll();
     }
 
     // ---------------------------------------------------------------- helpers
@@ -125,11 +164,33 @@ public class ClientScreen extends GuiScreen {
         return mx >= x && mx < x + w && my >= y && my < y + h;
     }
 
-    private void button(int x, int y, int w, int h, String label, int color, boolean hover) {
-        Gui.drawRect(x, y, x + w, y + h, color);
-        if (hover) Gui.drawRect(x, y, x + w, y + h, 0x30FFFFFF);
-        fontRendererObj
-            .drawString(label, x + (w - fontRendererObj.getStringWidth(label)) / 2, y + (h - 8) / 2, 0xFFFFFF);
+    /** A rectangle with 2-pixel rounded corners, made of five non-overlapping rectangles. */
+    private static void round(int x, int y, int w, int h, int color) {
+        int x2 = x + w;
+        int y2 = y + h;
+        Gui.drawRect(x + 2, y, x2 - 2, y2, color);
+        Gui.drawRect(x + 1, y + 1, x + 2, y2 - 1, color);
+        Gui.drawRect(x, y + 2, x + 1, y2 - 2, color);
+        Gui.drawRect(x2 - 2, y + 1, x2 - 1, y2 - 1, color);
+        Gui.drawRect(x2 - 1, y + 2, x2, y2 - 2, color);
+    }
+
+    private static void panel(int x, int y, int w, int h) {
+        round(x, y, w, h, LINE);
+        round(x + 1, y + 1, w - 2, h - 2, BG);
+    }
+
+    private static void toggle(int x, int y, boolean on) {
+        round(x, y, 16, 8, on ? ACCENT : SWITCH_OFF);
+        Gui.drawRect(on ? x + 9 : x + 1, y + 1, on ? x + 15 : x + 7, y + 7, on ? 0xFFFFFFFF : 0xFFC9C9D4);
+    }
+
+    private void text(String s, int x, int y, int color) {
+        f.draw(s, x, y, color);
+    }
+
+    private void centred(String s, int x, int y, int w, int h, int color) {
+        f.draw(s, x + (w - f.width(s)) / 2, y + (h - 7) / 2, color);
     }
 
     private static int hudW(HudModule m) {
@@ -148,60 +209,63 @@ public class ClientScreen extends GuiScreen {
         return Math.max(0, Math.min((int) (m.y * height), height - hudH(m)));
     }
 
-    private int cardX(int i) {
-        return bodyX + (i % COLS) * (cardW + GAP);
+    /** Rows in the options list: "Show background" first for HUD mods, then the mod's own settings. */
+    private int extraRows() {
+        return selected instanceof HudModule ? 1 : 0;
     }
 
-    private int cardY(int i) {
-        return bodyY + (i / COLS) * (CARD_H + GAP) - scroll;
+    private int rowCount() {
+        return extraRows() + selected.settings.size();
     }
 
-    private boolean rowVisible(int y, int h) {
-        return y >= bodyY && y + h <= bodyY + bodyH;
-    }
-
-    private int contentHeight() {
-        if (view == View.MODS) return ((cards.size() + COLS - 1) / COLS) * (CARD_H + GAP);
-        if (view == View.SETTINGS) return settingsOf.settings.size() * ROW;
-        return 0;
+    private static int maxScroll(int content, int view, int step) {
+        return (Math.max(0, content - view) + step - 1) / step * step;
     }
 
     private void clampScroll() {
-        int step = view == View.MODS ? CARD_H + GAP : ROW;
-        int max = Math.max(0, contentHeight() - bodyH);
-        max = (max + step - 1) / step * step;
-        scroll = Math.max(0, Math.min(scroll, max));
+        railScroll = Math.max(0, Math.min(railScroll, maxScroll(rail.size() * RAIL_ROW, railH, RAIL_ROW)));
+        if (selected != null) listScroll = Math.max(0, Math.min(listScroll, maxScroll(rowCount() * ROW, bodyH, ROW)));
+    }
+
+    private int btnX() {
+        return (width - MODS_W - 2 * (BTN_H + 4)) / 2;
     }
 
     // ---------------------------------------------------------------- drawing
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        Gui.drawRect(0, 0, width, height, view == View.EDIT ? 0x50000000 : 0x90000000);
+        Gui.drawRect(0, 0, width, height, 0x48000000);
         drawHud(mouseX, mouseY);
 
-        float t = Math.min(1f, (System.currentTimeMillis() - viewSince) / 140f);
-        float ease = 1f - (1f - t) * (1f - t);
+        // Name: "Client" in white, "M" in the accent colour
+        int half = logo.width("ClientM") / 2;
+        logo.drawShadowed("Client", width / 2 - half, logoY + 2, TEXT);
+        logo.drawShadowed("M", width / 2 - half + logo.width("Client"), logoY + 2, 0xFF4D5E);
 
-        if (view == View.EDIT) {
-            drawEditOverlay(mouseX, mouseY);
-            return;
-        }
+        drawButtons(mouseX, mouseY);
+        drawChips(mouseX, mouseY);
+        f.drawShadowed(HINT, (width - f.width(HINT)) / 2, height - 11, TEXT_2);
+
+        if (!panelOpen) return;
+        float t = Math.min(1f, (System.currentTimeMillis() - openedAt) / 120f);
         GL11.glPushMatrix();
-        GL11.glTranslatef(0f, (1f - ease) * 12f, 0f);
-        drawPanel(mouseX, mouseY);
+        GL11.glTranslatef(0f, (1f - t) * (1f - t) * 8f, 0f);
+        panel(sx, sy, sw, sh);
+        Gui.drawRect(sx + RAIL_W, sy + 1, sx + RAIL_W + 1, sy + sh - 1, LINE);
+        drawRail(mouseX, mouseY);
+        drawOptions(mouseX, mouseY);
         GL11.glPopMatrix();
     }
 
     private void drawHud(int mouseX, int mouseY) {
-        boolean editing = view == View.EDIT;
+        boolean overPanel = panelOpen && in(mouseX, mouseY, sx, sy, sw, sh);
         for (HudModule m : ClientM.modules.hud()) {
             int x = hudX(m);
             int y = hudY(m);
             int w = hudW(m);
             int h = hudH(m);
             boolean empty = m.width() <= 0 || m.height() <= 0;
-            if (!editing && (!m.enabled || empty)) continue;
 
             GL11.glPushMatrix();
             GL11.glTranslatef(x, y, 0f);
@@ -211,212 +275,148 @@ public class ClientScreen extends GuiScreen {
             } else {
                 m.render(fontRendererObj);
             }
-            if (editing && !m.enabled) Gui.drawRect(0, 0, w, h, 0xB0200000);
+            if (!m.enabled) Gui.drawRect(0, 0, w, h, 0xB0200000);
             GL11.glPopMatrix();
 
-            if (!editing) continue;
-            boolean hover = in(mouseX, mouseY, x, y, w, h);
-            int border = hover || m == dragging ? ACCENT : 0x50FFFFFF;
+            boolean hover = !overPanel && in(mouseX, mouseY, x, y, w, h);
+            int border = hover || m == dragging || m == selected ? ACCENT : 0x50FFFFFF;
             Gui.drawRect(x - 1, y - 1, x + w + 1, y, border);
             Gui.drawRect(x - 1, y + h, x + w + 1, y + h + 1, border);
             Gui.drawRect(x - 1, y, x, y + h, border);
             Gui.drawRect(x + w, y, x + w + 1, y + h, border);
             if (hover) {
                 String label = m.enabled ? m.name : m.name + " (off)";
-                fontRendererObj.drawStringWithShadow(label, x, y < 12 ? y + h + 3 : y - 10, ACCENT);
+                fontRendererObj.drawStringWithShadow(label, x, y < 12 ? y + h + 3 : y - 10, 0xFF4D5E);
             }
         }
     }
 
-    private void drawEditOverlay(int mouseX, int mouseY) {
-        int cx = width / 2;
-        int cy = height / 2;
-        GL11.glPushMatrix();
-        GL11.glTranslatef(cx, cy - 34, 0f);
-        GL11.glScalef(2f, 2f, 1f);
-        fontRendererObj
-            .drawStringWithShadow("ClientM", -fontRendererObj.getStringWidth("ClientM") / 2, 0, ACCENT & 0xFFFFFF);
-        GL11.glPopMatrix();
-        button(cx - 50, cy - 8, 100, 20, "MODS", NEUTRAL, in(mouseX, mouseY, cx - 50, cy - 8, 100, 20));
-        drawCenteredString(
-            fontRendererObj,
-            "Drag a module to move it   Right-click: on/off   Middle-click: background",
-            cx,
-            height - 14,
-            0xAAAAAA);
+    private void drawButtons(int mouseX, int mouseY) {
+        int x = btnX();
+        // Left: jump to the HUD mods (three bars)
+        panel(x, btnY, BTN_H, BTN_H);
+        if (in(mouseX, mouseY, x, btnY, BTN_H, BTN_H)) round(x, btnY, BTN_H, BTN_H, HOVER);
+        for (int i = 0; i < 3; i++) Gui.drawRect(x + 5, btnY + 5 + i * 3, x + 13, btnY + 6 + i * 3, 0xFFA3A3B2);
+
+        // Middle: show or hide the panel
+        int mx = x + BTN_H + 4;
+        round(mx, btnY, MODS_W, BTN_H, panelOpen ? ACCENT : LINE);
+        if (!panelOpen) round(mx + 1, btnY + 1, MODS_W - 2, BTN_H - 2, BG);
+        if (in(mouseX, mouseY, mx, btnY, MODS_W, BTN_H)) round(mx, btnY, MODS_W, BTN_H, HOVER);
+        bold.draw("Mods", mx + (MODS_W - bold.width("Mods")) / 2, btnY + 6, panelOpen ? INK : TEXT);
+
+        // Right: jump to the performance mods (two sliders)
+        int gx = mx + MODS_W + 4;
+        panel(gx, btnY, BTN_H, BTN_H);
+        if (in(mouseX, mouseY, gx, btnY, BTN_H, BTN_H)) round(gx, btnY, BTN_H, BTN_H, HOVER);
+        Gui.drawRect(gx + 5, btnY + 6, gx + 13, btnY + 7, 0xFFA3A3B2);
+        Gui.drawRect(gx + 5, btnY + 11, gx + 13, btnY + 12, 0xFFA3A3B2);
+        Gui.drawRect(gx + 10, btnY + 5, gx + 12, btnY + 8, 0xFFEDEDF2);
+        Gui.drawRect(gx + 6, btnY + 10, gx + 8, btnY + 13, 0xFFEDEDF2);
     }
 
-    private void drawPanel(int mouseX, int mouseY) {
-        Gui.drawRect(px, py, px + PANEL_W, py + PANEL_H, PANEL);
-        Gui.drawRect(px, py, px + PANEL_W, py + HEADER_H, HEADER);
-        Gui.drawRect(px, py + HEADER_H - 1, px + PANEL_W, py + HEADER_H, ACCENT);
-
-        // Header: back button, title, close
-        String back = view == View.SETTINGS ? "< Mods" : "< HUD";
-        int backW = fontRendererObj.getStringWidth(back) + 12;
-        button(px + 6, py + 6, backW, 14, back, NEUTRAL, in(mouseX, mouseY, px + 6, py + 6, backW, 14));
-        String title = view == View.SETTINGS ? settingsOf.name : "Mods";
-        fontRendererObj.drawStringWithShadow(title, px + 14 + backW, py + 9, 0xFFFFFF);
-        button(px + PANEL_W - 20, py + 6, 14, 14, "x", OFF, in(mouseX, mouseY, px + PANEL_W - 20, py + 6, 14, 14));
-
-        if (view == View.MODS) drawMods(mouseX, mouseY);
-        else drawSettings(mouseX, mouseY);
-
-        if (contentHeight() > bodyH) {
-            int trackH = bodyH;
-            int thumbH = Math.max(12, trackH * bodyH / contentHeight());
-            int thumbY = bodyY + (trackH - thumbH) * scroll / Math.max(1, contentHeight() - bodyH);
-            Gui.drawRect(px + PANEL_W - 5, bodyY, px + PANEL_W - 3, bodyY + trackH, 0x40FFFFFF);
-            Gui.drawRect(
-                px + PANEL_W - 5,
-                Math.min(thumbY, bodyY + trackH - thumbH),
-                px + PANEL_W - 3,
-                Math.min(thumbY, bodyY + trackH - thumbH) + thumbH,
-                ACCENT);
+    private void drawChips(int mouseX, int mouseY) {
+        for (int i = 0; i < presets.length; i++) {
+            int x = chipX[i];
+            int w = chipX[i + 1] - x - 3;
+            boolean on = presets[i] == PerformancePreset.last;
+            if (on) round(x, chipY, w, CHIP_H, PRESET);
+            else panel(x, chipY, w, CHIP_H);
+            if (in(mouseX, mouseY, x, chipY, w, CHIP_H)) round(x, chipY, w, CHIP_H, HOVER);
+            centred(presets[i].label, x, chipY, w, CHIP_H, on ? INK : TEXT_2);
         }
     }
 
-    private void drawMods(int mouseX, int mouseY) {
-        // Category tabs
-        Category[] cats = Category.values();
-        int tabW = bodyW / cats.length;
-        for (int i = 0; i < cats.length; i++) {
-            int tx = bodyX + i * tabW;
-            int ty = py + HEADER_H + 4;
-            boolean sel = cats[i] == selected;
-            boolean hover = in(mouseX, mouseY, tx, ty, tabW - 2, 14);
-            Gui.drawRect(tx, ty, tx + tabW - 2, ty + 14, sel ? NEUTRAL : hover ? 0x30FFFFFF : 0x18FFFFFF);
-            if (sel) Gui.drawRect(tx, ty + 13, tx + tabW - 2, ty + 14, ACCENT);
-            String label = cats[i].label;
-            fontRendererObj.drawString(
-                label,
-                tx + (tabW - 2 - fontRendererObj.getStringWidth(label)) / 2,
-                ty + 3,
-                sel ? 0xFFFFFF : 0xAAAAAA);
-        }
-
-        for (int i = 0; i < cards.size(); i++) {
-            int x = cardX(i);
-            int y = cardY(i);
-            if (!rowVisible(y, CARD_H)) continue;
-            Module m = cards.get(i);
-            boolean hover = in(mouseX, mouseY, x, y, cardW, CARD_H);
-            Gui.drawRect(x, y, x + cardW, y + CARD_H, hover ? CARD_HOVER : CARD);
-            Gui.drawRect(x, y, x + cardW, y + 1, m.enabled || !m.toggleable() ? ACCENT : 0xFF444444);
-
-            int nameW = fontRendererObj.getStringWidth(m.name);
-            int swatch = m.previewColor();
-            int nameX = x + (cardW - nameW - (swatch != -1 ? 14 : 0)) / 2;
-            fontRendererObj.drawStringWithShadow(m.name, nameX, y + 10, 0xFFFFFF);
-            if (swatch != -1) Gui.drawRect(nameX + nameW + 4, y + 9, nameX + nameW + 14, y + 19, 0xFF000000 | swatch);
-
-            int by = y + CARD_H - 20;
-            boolean hasOptions = !m.settings.isEmpty();
-            int optW = hasOptions ? 46 : 0;
-            if (m.toggleable()) {
-                int tw = cardW - 8 - (hasOptions ? optW + 4 : 0);
-                button(
-                    x + 4,
-                    by,
-                    tw,
-                    16,
-                    m.enabled ? "Enabled" : "Disabled",
-                    m.enabled ? ON : OFF,
-                    in(mouseX, mouseY, x + 4, by, tw, 16));
+    private void drawRail(int mouseX, int mouseY) {
+        int x = sx + 5;
+        int w = RAIL_W - 9;
+        for (int i = 0; i < rail.size(); i++) {
+            int y = railY + i * RAIL_ROW - railScroll;
+            if (y < railY || y + RAIL_ROW > railY + railH) continue;
+            Object o = rail.get(i);
+            if (o instanceof Category) {
+                text(((Category) o).label, x + 2, y + 4, TEXT_3);
+                continue;
             }
-            if (hasOptions) {
-                int ox = m.toggleable() ? x + cardW - 4 - optW : x + 4;
-                int ow = m.toggleable() ? optW : cardW - 8;
-                button(ox, by, ow, 16, "Options", NEUTRAL, in(mouseX, mouseY, ox, by, ow, 16));
-            }
+            Module m = (Module) o;
+            boolean sel = m == selected;
+            if (sel) round(x, y, w, RAIL_ROW - 1, ACCENT_TINT);
+            else if (in(mouseX, mouseY, x, y, w, RAIL_ROW - 1)) round(x, y, w, RAIL_ROW - 1, HOVER);
+            text(f.trim(m.name, w - 15), x + 5, y + 2, sel ? 0xFF4D5E : TEXT_2);
+            if (m.toggleable()) Gui.drawRect(x + w - 7, y + 4, x + w - 4, y + 7, m.enabled ? ACCENT : SWITCH_OFF);
         }
+        scrollbar(sx + RAIL_W - 3, railY, railH, rail.size() * RAIL_ROW, railScroll);
     }
 
-    private void drawSettings(int mouseX, int mouseY) {
-        String d = settingsOf.description();
-        if (d != null) fontRendererObj.drawString(d, bodyX + 2, py + HEADER_H + 8, 0x999999);
+    private void drawOptions(int mouseX, int mouseY) {
+        int right = lx + lw;
+        bold.draw(selected.name, lx + 2, sy + 9, TEXT);
+        String d = selected.description();
+        int nameW = bold.width(selected.name);
+        if (d != null && lx + nameW + 10 + f.width(d) < right - 22) text(d, lx + nameW + 10, sy + 9, TEXT_3);
+        if (selected.toggleable()) toggle(right - 22, sy + 9, selected.enabled);
+        Gui.drawRect(lx, sy + 21, right, sy + 22, LINE);
 
-        int right = bodyX + bodyW - 8;
-        List<Setting> settings = settingsOf.settings;
-        for (int i = 0; i < settings.size(); i++) {
-            int y = bodyY + i * ROW - scroll;
-            if (!rowVisible(y, ROW)) continue;
-            Setting s = settings.get(i);
-            boolean hover = in(mouseX, mouseY, bodyX, y, bodyW - 6, ROW - 2);
-            Gui.drawRect(bodyX, y, bodyX + bodyW - 6, y + ROW - 2, hover ? CARD_HOVER : CARD);
+        int extra = extraRows();
+        int rows = rowCount();
+        if (rows == 0) text("No options", lx + 6, bodyY + 5, TEXT_3);
+        for (int i = 0; i < rows; i++) {
+            int y = bodyY + i * ROW - listScroll;
+            if (y < bodyY || y + ROW > bodyY + bodyH) continue;
+            boolean hover = in(mouseX, mouseY, lx, y, lw, ROW - 1);
+            if (hover) round(lx, y, lw, ROW - 1, HOVER);
+            else if ((i & 1) == 1) round(lx, y, lw, ROW - 1, ROW_BG);
 
+            if (i < extra) {
+                text("Show background", lx + 6, y + 4, TEXT);
+                toggle(right - 22, y + 4, ((HudModule) selected).background);
+                continue;
+            }
+            Setting s = selected.settings.get(i - extra);
             if (s instanceof BoolSetting) {
-                BoolSetting b = (BoolSetting) s;
-                fontRendererObj.drawString(b.name, bodyX + 6, y + 5, 0xDDDDDD);
-                button(right - 34, y + 2, 34, 14, b.value ? "ON" : "OFF", b.value ? ON : OFF, false);
+                text(s.name, lx + 6, y + 4, TEXT);
+                toggle(right - 22, y + 4, ((BoolSetting) s).value);
             } else if (s instanceof IntSetting) {
                 IntSetting n = (IntSetting) s;
-                fontRendererObj.drawString(n.name + ": " + n.value, bodyX + 6, y + 5, 0xDDDDDD);
-                int sx = right - SLIDER_W;
+                text(n.name, lx + 6, y + 4, TEXT);
+                int x = right - 6 - SLIDER_W;
                 int filled = n.max == n.min ? 0 : (n.value - n.min) * SLIDER_W / (n.max - n.min);
-                Gui.drawRect(sx, y + 8, sx + SLIDER_W, y + 10, 0xFF555555);
-                Gui.drawRect(sx, y + 8, sx + filled, y + 10, ACCENT);
-                Gui.drawRect(sx + filled - 2, y + 4, sx + filled + 2, y + 14, 0xFFFFFFFF);
+                String v = Integer.toString(n.value);
+                text(v, x - 6 - f.width(v), y + 4, TEXT_2);
+                Gui.drawRect(x, y + 7, x + SLIDER_W, y + 9, SWITCH_OFF);
+                Gui.drawRect(x, y + 7, x + filled, y + 9, ACCENT);
+                Gui.drawRect(x + filled - 2, y + 4, x + filled + 2, y + 12, 0xFFFFFFFF);
             } else if (s instanceof ActionSetting) {
                 ActionSetting a = (ActionSetting) s;
-                fontRendererObj.drawString(a.name, bodyX + 6, y + 5, 0xDDDDDD);
-                int bw = fontRendererObj.getStringWidth(a.button) + 14;
-                button(right - bw, y + 2, bw, 14, a.button, NEUTRAL, hover && mouseX >= right - bw);
+                int bw = f.width(a.button) + 12;
+                text(f.trim(a.name, lw - bw - 16), lx + 6, y + 4, TEXT);
+                round(right - 6 - bw, y + 2, bw, 12, hover && mouseX >= right - 6 - bw ? ACCENT : SWITCH_OFF);
+                centred(a.button, right - 6 - bw, y + 2, bw, 12, TEXT);
             }
         }
+        scrollbar(sx + sw - 6, bodyY, bodyH, rows * ROW, listScroll);
+    }
+
+    private static void scrollbar(int x, int y, int h, int content, int scroll) {
+        if (content <= h) return;
+        int thumb = Math.max(10, h * h / content);
+        int ty = y + Math.min(h - thumb, (h - thumb) * scroll / Math.max(1, content - h));
+        Gui.drawRect(x, ty, x + 2, ty + thumb, ACCENT);
     }
 
     // ---------------------------------------------------------------- input
 
-    @Override
-    protected void keyTyped(char typed, int key) {
-        if (key == Keyboard.KEY_ESCAPE) {
-            if (view == View.SETTINGS) {
-                show(View.MODS);
-                return;
-            }
-            if (view == View.MODS) {
-                show(View.EDIT);
-                return;
-            }
-        }
-        super.keyTyped(typed, key);
-    }
-
     private void slide(IntSetting s, int mouseX) {
-        int sx = bodyX + bodyW - 8 - SLIDER_W;
-        float frac = Math.max(0f, Math.min(1f, (mouseX - sx) / (float) SLIDER_W));
+        int x = lx + lw - 6 - SLIDER_W;
+        float frac = Math.max(0f, Math.min(1f, (mouseX - x) / (float) SLIDER_W));
         s.set(s.min + Math.round(frac * (s.max - s.min)));
     }
 
     @Override
     protected void mouseClicked(int mouseX, int mouseY, int button) {
-        if (view == View.EDIT) {
-            clickEdit(mouseX, mouseY, button);
-            return;
-        }
-        if (button != 0) return;
-
-        int backW = fontRendererObj.getStringWidth(view == View.SETTINGS ? "< Mods" : "< HUD") + 12;
-        if (in(mouseX, mouseY, px + 6, py + 6, backW, 14)) {
-            show(view == View.SETTINGS ? View.MODS : View.EDIT);
-            return;
-        }
-        if (in(mouseX, mouseY, px + PANEL_W - 20, py + 6, 14, 14)) {
-            mc.displayGuiScreen(null);
-            return;
-        }
-        if (!in(mouseX, mouseY, px, py, PANEL_W, PANEL_H)) {
-            show(View.EDIT);
-            return;
-        }
-        if (view == View.MODS) clickMods(mouseX, mouseY);
-        else clickSettings(mouseX, mouseY);
-    }
-
-    private void clickEdit(int mouseX, int mouseY, int button) {
-        if (button == 0 && in(mouseX, mouseY, width / 2 - 50, height / 2 - 8, 100, 20)) {
-            show(View.MODS);
+        if (button == 0 && clickChrome(mouseX, mouseY)) return;
+        if (panelOpen && in(mouseX, mouseY, sx, sy, sw, sh)) {
+            if (button == 0) clickPanel(mouseX, mouseY);
             return;
         }
         HudModule[] hud = ClientM.modules.hud();
@@ -436,54 +436,70 @@ public class ClientScreen extends GuiScreen {
         }
     }
 
-    private void clickMods(int mouseX, int mouseY) {
-        Category[] cats = Category.values();
-        int tabW = bodyW / cats.length;
-        for (int i = 0; i < cats.length; i++) {
-            if (in(mouseX, mouseY, bodyX + i * tabW, py + HEADER_H + 4, tabW - 2, 14)) {
-                selected = cats[i];
-                scroll = 0;
-                rebuildCards();
-                return;
+    /** The three centre buttons and the preset chips. */
+    private boolean clickChrome(int mouseX, int mouseY) {
+        int x = btnX();
+        if (in(mouseX, mouseY, x, btnY, BTN_H, BTN_H)) {
+            showMods(Category.HUD);
+            return true;
+        }
+        if (in(mouseX, mouseY, x + BTN_H + 4, btnY, MODS_W, BTN_H)) {
+            panelOpen = !panelOpen;
+            openedAt = System.currentTimeMillis();
+            return true;
+        }
+        if (in(mouseX, mouseY, x + BTN_H + 8 + MODS_W, btnY, BTN_H, BTN_H)) {
+            showMods(Category.PERFORMANCE);
+            return true;
+        }
+        for (int i = 0; i < presets.length; i++) {
+            if (in(mouseX, mouseY, chipX[i], chipY, chipX[i + 1] - chipX[i] - 3, CHIP_H)) {
+                presets[i].apply();
+                return true;
             }
         }
-        for (int i = 0; i < cards.size(); i++) {
-            int x = cardX(i);
-            int y = cardY(i);
-            if (!rowVisible(y, CARD_H) || !in(mouseX, mouseY, x, y, cardW, CARD_H)) continue;
-            Module m = cards.get(i);
-            int by = y + CARD_H - 20;
-            boolean hasOptions = !m.settings.isEmpty();
-            boolean onButtons = mouseY >= by && mouseY < by + 16;
-            boolean onOptions = hasOptions && onButtons && (!m.toggleable() || mouseX >= x + cardW - 4 - 46);
-            if (onOptions) {
-                settingsOf = m;
-                show(View.SETTINGS);
-            } else if (onButtons && m.toggleable()) {
-                m.setEnabled(!m.enabled);
-            }
-            return;
-        }
+        return false;
     }
 
-    private void clickSettings(int mouseX, int mouseY) {
-        int right = bodyX + bodyW - 8;
-        List<Setting> settings = settingsOf.settings;
-        for (int i = 0; i < settings.size(); i++) {
-            int y = bodyY + i * ROW - scroll;
-            if (!rowVisible(y, ROW) || !in(mouseX, mouseY, bodyX, y, bodyW - 6, ROW - 2)) continue;
-            Setting s = settings.get(i);
-            if (s instanceof BoolSetting) {
-                ((BoolSetting) s).value = !((BoolSetting) s).value;
-                settingsOf.onSettingsChanged();
-            } else if (s instanceof IntSetting && mouseX >= right - SLIDER_W - 4) {
-                sliding = (IntSetting) s;
-                slide(sliding, mouseX);
-            } else if (s instanceof ActionSetting) {
-                ActionSetting a = (ActionSetting) s;
-                if (mouseX >= right - fontRendererObj.getStringWidth(a.button) - 14) a.action.run();
+    private void clickPanel(int mouseX, int mouseY) {
+        if (mouseX < sx + RAIL_W) {
+            int i = (mouseY - railY + railScroll) / RAIL_ROW;
+            if (mouseY >= railY && mouseY < railY + railH && i >= 0 && i < rail.size()) {
+                Object o = rail.get(i);
+                if (o instanceof Module) {
+                    Module m = (Module) o;
+                    // The dot at the end of a row switches the mod on or off without opening it.
+                    if (m.toggleable() && mouseX >= sx + RAIL_W - 14) m.setEnabled(!m.enabled);
+                    else select(m);
+                }
             }
             return;
+        }
+        int right = lx + lw;
+        if (mouseY < sy + 21) {
+            if (selected.toggleable() && mouseX >= right - 28) selected.setEnabled(!selected.enabled);
+            return;
+        }
+        int i = (mouseY - bodyY + listScroll) / ROW;
+        int y = bodyY + i * ROW - listScroll;
+        if (mouseY < bodyY || i >= rowCount() || y < bodyY || y + ROW > bodyY + bodyH) return;
+        int extra = extraRows();
+        if (i < extra) {
+            HudModule h = (HudModule) selected;
+            h.background = !h.background;
+            return;
+        }
+        Setting s = selected.settings.get(i - extra);
+        if (s instanceof BoolSetting) {
+            // The whole row is the click target, not only the switch.
+            ((BoolSetting) s).value = !((BoolSetting) s).value;
+            selected.onSettingsChanged();
+        } else if (s instanceof IntSetting && mouseX >= right - 10 - SLIDER_W) {
+            sliding = (IntSetting) s;
+            slide(sliding, mouseX);
+        } else if (s instanceof ActionSetting) {
+            ActionSetting a = (ActionSetting) s;
+            if (mouseX >= right - 18 - f.width(a.button)) a.action.run();
         }
     }
 
@@ -507,7 +523,7 @@ public class ClientScreen extends GuiScreen {
         if (sliding != null) {
             // Apply once on release, so dragging a slider does not reload chunks on every pixel.
             sliding = null;
-            settingsOf.onSettingsChanged();
+            selected.onSettingsChanged();
         }
     }
 
@@ -515,9 +531,10 @@ public class ClientScreen extends GuiScreen {
     public void handleMouseInput() {
         super.handleMouseInput();
         int wheel = Mouse.getEventDWheel();
-        if (wheel != 0 && view != View.EDIT) {
-            scroll += (wheel > 0 ? -1 : 1) * (view == View.MODS ? CARD_H + GAP : ROW);
-            clampScroll();
-        }
+        if (wheel == 0 || !panelOpen) return;
+        int mouseX = Mouse.getEventX() * width / mc.displayWidth;
+        if (mouseX < sx + RAIL_W) railScroll += wheel > 0 ? -RAIL_ROW : RAIL_ROW;
+        else listScroll += wheel > 0 ? -ROW : ROW;
+        clampScroll();
     }
 }
