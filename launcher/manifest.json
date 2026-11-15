@@ -5,6 +5,11 @@
     "size": 73777,
     "sha256": "90b5bf2a5a5dad32a9a35c52db6c1a96ee53100e724c3e961602ee972052e469"
   },
+  "prismPack": {
+    "url": "https://github.com/GTNewHorizons/lwjgl3ify/releases/download/3.0.33/lwjgl3ify-3.0.33-multimc.zip",
+    "size": 7180645,
+    "sha256": "7a71e04f0dd2df84816ca6d7c79625f7f5a8b4ec8e6c90cc3f2865ac591279bd"
+  },
   "javaMajor": 21,
   "mods": [
     { "file": "angelica-2.2.46.jar", "size": 13038579, "sha256": "4561602f0594ec84dd76fcfe7606d2ea47bb12fffd7f02a9a411ecd187b06f7a", "url": "https://github.com/GTNewHorizons/Angelica/releases/download/2.2.46/angelica-2.2.46.jar" },

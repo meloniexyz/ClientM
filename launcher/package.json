@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "copy-mod": "node scripts/copy-mod.js",
-    "dist": "node scripts/copy-mod.js && electron-builder --win nsis"
+    "dist": "node scripts/copy-mod.js && electron-builder --win nsis",
+    "prism": "node scripts/copy-mod.js && node scripts/build-prism-pack.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",

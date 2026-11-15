@@ -37,6 +37,15 @@ npm run dist
 
 The installer is written to `launcher/dist/ClientM-Setup-<version>.exe`.
 
+## Prism Launcher pack
+
+Each release also has `ClientM-Prism-<version>.zip`, a ready-made instance for Prism Launcher (or MultiMC), which
+handles the Microsoft sign-in itself. In Prism: Add Instance, Import, pick the zip. Then choose a Java 21 for the
+instance under Settings > Java. The pack does not update itself; import the new zip, or replace `ClientM.jar` in the
+instance's mods folder.
+
+Build it with `npm run prism` in `launcher/` (output in `launcher/dist/`).
+
 ## Signing in
 
 The launcher signs in with Microsoft through the device-code flow, so the password is only ever typed on Microsoft's
