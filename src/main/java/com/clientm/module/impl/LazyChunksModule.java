@@ -20,7 +20,7 @@ public class LazyChunksModule extends Module {
     private static final int[] THREADS = { 0, 3, 2, 1 };
 
     private final ChoiceSetting speed = add(
-        new ChoiceSetting("speed", "Loading speed", 0, "Fast", "Medium", "Slow", "Slowest"));
+        new ChoiceSetting("speed", "Loading speed", 1, "Fast", "Medium", "Slow", "Slowest"));
 
     public LazyChunksModule() {
         super("lazychunks", "Lazy Chunk Loading", Category.PERFORMANCE, true);
