@@ -17,6 +17,7 @@ import com.clientm.module.HudModule;
 import com.clientm.module.Module;
 import com.clientm.setting.ActionSetting;
 import com.clientm.setting.BoolSetting;
+import com.clientm.setting.ChoiceSetting;
 import com.clientm.setting.IntSetting;
 import com.clientm.setting.Setting;
 
@@ -55,6 +56,8 @@ public class ClientScreen extends GuiScreen {
     // Remembered between openings
     private static String selectedId = "fps";
     private static boolean panelOpen = true;
+    /** Categories folded shut in the left list. */
+    private static final java.util.Set<Category> collapsed = java.util.EnumSet.noneOf(Category.class);
 
     private Module selected;
     private long openedAt;
@@ -106,11 +109,7 @@ public class ClientScreen extends GuiScreen {
         }
         chipX[presets.length] = x;
 
-        rail.clear();
-        for (Category c : Category.values()) {
-            rail.add(c);
-            for (Module m : ClientM.modules.all()) if (m.category == c) rail.add(m);
-        }
+        buildRail();
         if (selected == null) {
             for (Module m : ClientM.modules.all()) if (m.id.equals(selectedId)) selected = m;
             if (selected == null) selected = ClientM.modules.all()
@@ -131,7 +130,23 @@ public class ClientScreen extends GuiScreen {
         return false;
     }
 
+    private void buildRail() {
+        rail.clear();
+        for (Category c : Category.values()) {
+            rail.add(c);
+            if (collapsed.contains(c)) continue;
+            for (Module m : ClientM.modules.all()) if (m.category == c) rail.add(m);
+        }
+    }
+
+    private static int count(Category c) {
+        int n = 0;
+        for (Module m : ClientM.modules.all()) if (m.category == c) n++;
+        return n;
+    }
+
     private void select(Module m) {
+        if (collapsed.remove(m.category)) buildRail();
         selected = m;
         selectedId = m.id;
         listScroll = 0;
@@ -194,11 +209,11 @@ public class ClientScreen extends GuiScreen {
     }
 
     private static int hudW(HudModule m) {
-        return Math.max(m.width(), MIN_W);
+        return Math.max(m.scaledWidth(), MIN_W);
     }
 
     private static int hudH(HudModule m) {
-        return Math.max(m.height(), MIN_H);
+        return Math.max(m.scaledHeight(), MIN_H);
     }
 
     private int hudX(HudModule m) {
@@ -273,7 +288,10 @@ public class ClientScreen extends GuiScreen {
                 Gui.drawRect(0, 0, w, h, 0x6F000000);
                 fontRendererObj.drawStringWithShadow(m.name, 3, 3, 0xFFFFFF);
             } else {
+                GL11.glPushMatrix();
+                GL11.glScalef(m.scale(), m.scale(), 1f);
                 m.render(fontRendererObj);
+                GL11.glPopMatrix();
             }
             if (!m.enabled) Gui.drawRect(0, 0, w, h, 0xB0200000);
             GL11.glPopMatrix();
@@ -335,7 +353,15 @@ public class ClientScreen extends GuiScreen {
             if (y < railY || y + RAIL_ROW > railY + railH) continue;
             Object o = rail.get(i);
             if (o instanceof Category) {
-                text(((Category) o).label, x + 2, y + 4, TEXT_3);
+                // Category heading: click to fold or unfold its mods
+                Category c = (Category) o;
+                boolean shut = collapsed.contains(c);
+                if (in(mouseX, mouseY, x, y, w, RAIL_ROW - 1)) round(x, y, w, RAIL_ROW - 1, HOVER);
+                text(shut ? ">" : "v", x + 3, y + 3, TEXT_3);
+                bold.draw(c.label, x + 12, y + 3, TEXT_2);
+                String n = Integer.toString(count(c));
+                text(n, x + w - 4 - f.width(n), y + 3, TEXT_3);
+                Gui.drawRect(x + 2, y + RAIL_ROW - 1, x + w - 2, y + RAIL_ROW, LINE);
                 continue;
             }
             Module m = (Module) o;
@@ -376,6 +402,15 @@ public class ClientScreen extends GuiScreen {
             if (s instanceof BoolSetting) {
                 text(s.name, lx + 6, y + 4, TEXT);
                 toggle(right - 22, y + 4, ((BoolSetting) s).value);
+            } else if (s instanceof ChoiceSetting) {
+                // "< Label >" selector
+                ChoiceSetting c = (ChoiceSetting) s;
+                text(c.name, lx + 6, y + 4, TEXT);
+                int x = right - 6 - SLIDER_W;
+                round(x, y + 2, SLIDER_W, 12, SWITCH_OFF);
+                text("<", x + 5, y + 4, TEXT_2);
+                text(">", x + SLIDER_W - 5 - f.width(">"), y + 4, TEXT_2);
+                centred(c.label(), x, y + 2, SLIDER_W, 12, TEXT);
             } else if (s instanceof IntSetting) {
                 IntSetting n = (IntSetting) s;
                 text(n.name, lx + 6, y + 4, TEXT);
@@ -466,7 +501,11 @@ public class ClientScreen extends GuiScreen {
             int i = (mouseY - railY + railScroll) / RAIL_ROW;
             if (mouseY >= railY && mouseY < railY + railH && i >= 0 && i < rail.size()) {
                 Object o = rail.get(i);
-                if (o instanceof Module) {
+                if (o instanceof Category) {
+                    if (!collapsed.remove(o)) collapsed.add((Category) o);
+                    buildRail();
+                    clampScroll();
+                } else if (o instanceof Module) {
                     Module m = (Module) o;
                     // The dot at the end of a row switches the mod on or off without opening it.
                     if (m.toggleable() && mouseX >= sx + RAIL_W - 14) m.setEnabled(!m.enabled);
@@ -493,6 +532,10 @@ public class ClientScreen extends GuiScreen {
         if (s instanceof BoolSetting) {
             // The whole row is the click target, not only the switch.
             ((BoolSetting) s).value = !((BoolSetting) s).value;
+            selected.onSettingsChanged();
+        } else if (s instanceof ChoiceSetting) {
+            // Left half of the selector goes back, anywhere else on the row goes forward.
+            ((ChoiceSetting) s).step(mouseX >= right - 6 - SLIDER_W && mouseX < right - 6 - SLIDER_W / 2 ? -1 : 1);
             selected.onSettingsChanged();
         } else if (s instanceof IntSetting && mouseX >= right - 10 - SLIDER_W) {
             sliding = (IntSetting) s;

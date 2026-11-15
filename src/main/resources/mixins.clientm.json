@@ -14,7 +14,8 @@
     "MixinRenderItem_GlintColor",
     "MixinRendererLivingEntity_GlintColor",
     "MixinRendererLivingEntity_HitColour",
-    "MixinGui_TexturedRect"
+    "MixinGui_TexturedRect",
+    "MixinRenderBlocks_HideFoliage"
   ],
   "server": []
 }

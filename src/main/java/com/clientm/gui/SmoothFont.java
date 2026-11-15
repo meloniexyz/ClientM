@@ -23,10 +23,11 @@ public final class SmoothFont {
 
     private static final int FIRST = 32;
     private static final int LAST = 126;
-    private static final int PAD = 2;
     private static final Map<Integer, SmoothFont> CACHE = new HashMap<>();
 
     private final float inv;
+    /** Empty pixels around each letter, so a neighbour with an overhang (like "j") never bleeds in. */
+    private final int pad;
     private final int scale;
     private final int textureId;
     private final float atlas;
@@ -53,6 +54,7 @@ public final class SmoothFont {
     private SmoothFont(int scale, int px, boolean bold) {
         this.scale = scale;
         this.inv = 1f / scale;
+        this.pad = Math.max(2, px / 5);
         Font font = new Font("Segoe UI", bold ? Font.BOLD : Font.PLAIN, px);
 
         Graphics2D probe = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB).createGraphics();
@@ -80,7 +82,7 @@ public final class SmoothFont {
         g.setColor(java.awt.Color.WHITE);
         for (int c = FIRST; c <= LAST; c++) {
             int i = c - FIRST;
-            g.drawString(String.valueOf((char) c), cellX[i] + PAD, cellY[i] + 1 + ascent);
+            g.drawString(String.valueOf((char) c), cellX[i] + pad, cellY[i] + 1 + ascent);
         }
         g.dispose();
 
@@ -94,7 +96,7 @@ public final class SmoothFont {
         int x = 0;
         int y = 0;
         for (int i = 0; i < advance.length; i++) {
-            int w = advance[i] + PAD * 2;
+            int w = advance[i] + pad * 2;
             if (x + w > size) {
                 x = 0;
                 y += cellH;
@@ -141,7 +143,7 @@ public final class SmoothFont {
 
     private void draw(String s, float x, float y, int rgb, float alpha) {
         // Snapped to whole screen pixels so the letters stay sharp.
-        int px = Math.round(x * scale) - PAD;
+        int px = Math.round(x * scale) - pad;
         int py = Math.round(y * scale) - capTop;
         float y0 = py * inv;
         float y1 = (py + cellH) * inv;
@@ -157,7 +159,7 @@ public final class SmoothFont {
         t.setColorRGBA_F((rgb >> 16 & 255) / 255f, (rgb >> 8 & 255) / 255f, (rgb & 255) / 255f, alpha);
         for (int n = 0; n < s.length(); n++) {
             int i = index(s.charAt(n));
-            int w = advance[i] + PAD * 2;
+            int w = advance[i] + pad * 2;
             float x0 = px * inv;
             float x1 = (px + w) * inv;
             float u0 = cellX[i] / atlas;

@@ -4,8 +4,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
 
 import com.clientm.module.HudModule;
+import com.clientm.setting.ChoiceSetting;
 
 public class FpsModule extends HudModule {
+
+    private final ChoiceSetting format = add(new ChoiceSetting("format", "Format", 0, "123 FPS", "FPS: 123", "123"));
 
     private String text = "0 FPS";
     private int textWidth;
@@ -16,12 +19,22 @@ public class FpsModule extends HudModule {
     }
 
     @Override
+    public String description() {
+        return "Frames per second";
+    }
+
+    @Override
+    public void onSettingsChanged() {
+        lastFps = -1;
+    }
+
+    @Override
     public void onTick() {
         // Minecraft.debugFPS is private in 1.7.10; the debug string starts with "<n> fps".
         int fps = parseLeadingInt(mc.debug);
         if (fps != lastFps) {
             lastFps = fps;
-            text = fps + " FPS";
+            text = format.value == 0 ? fps + " FPS" : format.value == 1 ? "FPS: " + fps : Integer.toString(fps);
             textWidth = mc.fontRenderer.getStringWidth(text);
         }
     }

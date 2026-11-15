@@ -33,6 +33,7 @@ public class ClientM {
     public void init(FMLInitializationEvent event) {
         if (event.getSide() != Side.CLIENT) return;
         modules.init();
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(new com.clientm.gui.ClientMainMenu.Hook());
         if (com.clientm.debug.ScreenshotTour.requested()) {
             cpw.mods.fml.common.FMLCommonHandler.instance()
                 .bus()

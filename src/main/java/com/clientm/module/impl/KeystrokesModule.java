@@ -76,13 +76,12 @@ public class KeystrokesModule extends HudModule {
 
         boolean jump = gs.keyBindJump.getIsKeyPressed();
         int y = step * 3;
-        Gui.drawRect(0, y, TOTAL_W, y + 10, jump ? 0x99FFFFFF : 0x6F000000);
+        Gui.drawRect(0, y, TOTAL_W, y + 10, jump ? 0x99FFFFFF : bg());
         Gui.drawRect(TOTAL_W / 2 - 12, y + 4, TOTAL_W / 2 + 12, y + 6, jump ? 0xFF000000 : 0xFFFFFFFF);
     }
 
-    private static void box(FontRenderer font, int x, int y, int w, int h, boolean pressed, String label,
-        int labelWidth) {
-        Gui.drawRect(x, y, x + w, y + h, pressed ? 0x99FFFFFF : 0x6F000000);
+    private void box(FontRenderer font, int x, int y, int w, int h, boolean pressed, String label, int labelWidth) {
+        Gui.drawRect(x, y, x + w, y + h, pressed ? 0x99FFFFFF : bg());
         font.drawString(label, x + (w - labelWidth) / 2 + 1, y + (h - 8) / 2, pressed ? 0x000000 : 0xFFFFFF);
     }
 }

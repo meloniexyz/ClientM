@@ -25,6 +25,7 @@ public final class ScreenshotTour {
 
     private final Minecraft mc = Minecraft.getMinecraft();
     private boolean launched;
+    private int menuTicks;
     private int step;
     private int wait = "bench".equals(System.getenv("CLIENTM_TOUR")) ? 400 : 140;
     private ClientScreen screen;
@@ -37,7 +38,11 @@ public final class ScreenshotTour {
     public void onTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         if (!launched) {
-            if (mc.currentScreen instanceof GuiMainMenu) launchFirstWorld();
+            if (mc.currentScreen instanceof GuiMainMenu || mc.currentScreen instanceof com.clientm.gui.ClientMainMenu) {
+                // Give the title screen a moment to draw, photograph it, then load the world.
+                if (++menuTicks == 30) shot("00-main-menu");
+                if (menuTicks > 34) launchFirstWorld();
+            }
             return;
         }
         if (forceHurt && mc.thePlayer != null) mc.thePlayer.hurtTime = 8;
@@ -183,7 +188,41 @@ public final class ScreenshotTour {
 
     private boolean forceHurt;
 
+    /** CLIENTM_TOUR=world: the Low preset as it comes, then without foliage, then with fog back on. */
+    private void worldTest() {
+        wait = 120;
+        switch (step++) {
+            case 0:
+                if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+                PerformancePreset.LOW.apply();
+                break;
+            case 1:
+                shot("world-1-low-preset");
+                com.clientm.module.impl.HideFoliageModule.set(true);
+                break;
+            case 2:
+                shot("world-2-foliage-hidden");
+                com.clientm.module.impl.NoFogModule.set(false);
+                break;
+            case 3:
+                shot("world-3-fog-on");
+                PerformancePreset.POTATO.apply(); // render distance 2, so fog would sit right in front
+                break;
+            case 4:
+                shot("world-4-potato-no-fog");
+                com.clientm.module.impl.NoFogModule.set(false);
+                break;
+            default:
+                shot("world-5-potato-fog-on");
+                mc.shutdown();
+        }
+    }
+
     private void advance() {
+        if ("world".equals(System.getenv("CLIENTM_TOUR"))) {
+            worldTest();
+            return;
+        }
         if ("hit".equals(System.getenv("CLIENTM_TOUR"))) {
             hitTest();
             return;

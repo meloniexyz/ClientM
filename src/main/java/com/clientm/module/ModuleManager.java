@@ -28,9 +28,12 @@ import com.clientm.module.impl.CoordinatesModule;
 import com.clientm.module.impl.CpsModule;
 import com.clientm.module.impl.FpsModule;
 import com.clientm.module.impl.GlintModule;
+import com.clientm.module.impl.HideFoliageModule;
 import com.clientm.module.impl.HitColourModule;
 import com.clientm.module.impl.HudCachingModule;
 import com.clientm.module.impl.KeystrokesModule;
+import com.clientm.module.impl.LazyChunksModule;
+import com.clientm.module.impl.NoFogModule;
 import com.clientm.module.impl.PerformanceModule;
 import com.clientm.module.impl.PotionStatusModule;
 import com.clientm.module.impl.TexturedBackgroundsModule;
@@ -78,6 +81,9 @@ public class ModuleManager {
         register(new HitColourModule());
         register(new PerformanceModule());
         register(new HudCachingModule());
+        register(new LazyChunksModule());
+        register(new NoFogModule());
+        register(new HideFoliageModule());
         register(new ChunkLoadingModule());
         register(new TexturedBackgroundsModule());
         load();
@@ -148,9 +154,11 @@ public class ModuleManager {
             if (!m.enabled) continue;
             GL11.glPushMatrix();
             // Same clamp as the editor, so a module never ends up off-screen after a resize.
-            int x = Math.max(0, Math.min((int) (m.x * sw), sw - m.width()));
-            int y = Math.max(0, Math.min((int) (m.y * sh), sh - m.height()));
+            int x = Math.max(0, Math.min((int) (m.x * sw), sw - m.scaledWidth()));
+            int y = Math.max(0, Math.min((int) (m.y * sh), sh - m.scaledHeight()));
             GL11.glTranslatef(x, y, 0f);
+            float scale = m.scale();
+            if (scale != 1f) GL11.glScalef(scale, scale, 1f);
             m.render(mc.fontRenderer);
             GL11.glPopMatrix();
         }

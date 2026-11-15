@@ -7,6 +7,8 @@ import org.lwjgl.opengl.Display;
 
 import com.clientm.ClientM;
 import com.clientm.module.impl.GlintModule;
+import com.clientm.module.impl.HideFoliageModule;
+import com.clientm.module.impl.NoFogModule;
 
 /**
  * One-click video configurations, from "squeeze every frame" to "look as good as possible". Each sets Minecraft's own
@@ -87,12 +89,14 @@ public enum PerformancePreset {
 
         // The glint is an extra draw pass on every enchanted item, so Potato drops it.
         GlintModule.setShown(glint);
+        // The two fastest presets drop the distance fog; Potato also drops tall grass and ferns.
+        NoFogModule.set(this == POTATO || this == LOW);
+        HideFoliageModule.set(this == POTATO);
 
         if (AngelicaBridge.available()) {
             boolean a = false;
             // Chunk building
             a |= rendererChanged |= AngelicaBridge.set("performance", "chunkBuilderThreads", 0); // auto
-            a |= AngelicaBridge.set("performance", "alwaysDeferChunkUpdates", true);
             // Free wins: skip everything that cannot be seen, use the cheaper vertex layout
             a |= AngelicaBridge.set("performance", "useOcclusionCulling", true);
             a |= AngelicaBridge.set("performance", "useEntityCulling", true);

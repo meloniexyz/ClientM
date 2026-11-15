@@ -60,7 +60,7 @@ public class PotionStatusModule extends HudModule {
     @Override
     public void render(FontRenderer font) {
         if (count == 0) return;
-        if (background) Gui.drawRect(0, 0, width(), height(), 0x6F000000);
-        for (int i = 0; i < count; i++) font.drawStringWithShadow(lines[i], 3, 3 + i * 10, colors[i]);
+        if (background) Gui.drawRect(0, 0, width(), height(), bg());
+        for (int i = 0; i < count; i++) text(font, lines[i], 3, 3 + i * 10, colors[i]);
     }
 }

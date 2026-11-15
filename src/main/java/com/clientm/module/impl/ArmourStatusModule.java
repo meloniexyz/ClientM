@@ -25,11 +25,19 @@ public class ArmourStatusModule extends HudModule {
     private int count;
     private int maxWidth;
 
+    private final com.clientm.setting.ChoiceSetting durability = add(
+        new com.clientm.setting.ChoiceSetting("durability", "Durability", 0, "Uses left", "Percent", "Hidden"));
+
     public ArmourStatusModule() {
         super("armour", "Armour Status", false, 0.9f, 0.6f);
         background = false;
         java.util.Arrays.fill(value, Integer.MIN_VALUE);
         java.util.Arrays.fill(text, "");
+    }
+
+    @Override
+    public void onSettingsChanged() {
+        java.util.Arrays.fill(value, Integer.MIN_VALUE);
     }
 
     @Override
@@ -48,17 +56,25 @@ public class ArmourStatusModule extends HudModule {
         stacks[i] = stack;
         int v;
         int c = 0xFFFFFF;
+        boolean percent = false;
         if (stack.isItemStackDamageable()) {
             int max = stack.getMaxDamage();
             v = max - stack.getItemDamage();
             int pct = max <= 0 ? 100 : v * 100 / max;
             c = pct > 50 ? 0x55FF55 : pct > 20 ? 0xFFFF55 : 0xFF5555;
+            // Durability option: 0 = uses left, 1 = percent, 2 = hidden
+            if (durability.value == 1) {
+                v = pct;
+                percent = true;
+            } else if (durability.value == 2) {
+                v = -1;
+            }
         } else {
             v = stack.stackSize > 1 ? stack.stackSize : -1;
         }
         if (v != value[i]) {
             value[i] = v;
-            text[i] = v < 0 ? "" : Integer.toString(v);
+            text[i] = v < 0 ? "" : percent ? v + "%" : Integer.toString(v);
         }
         color[i] = c;
         int w = font.getStringWidth(text[i]);
@@ -89,7 +105,7 @@ public class ArmourStatusModule extends HudModule {
         GL11.glDisable(GL11.GL_LIGHTING);
         GL11.glDisable(GL11.GL_DEPTH_TEST);
         for (int i = 0; i < count; i++) {
-            if (!text[i].isEmpty()) font.drawStringWithShadow(text[i], 19, i * ROW + 4, color[i]);
+            if (!text[i].isEmpty()) text(font, text[i], 19, i * ROW + 4, color[i]);
         }
         GL11.glEnable(GL11.GL_DEPTH_TEST);
     }
