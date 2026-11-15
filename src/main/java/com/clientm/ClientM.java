@@ -33,6 +33,11 @@ public class ClientM {
     public void init(FMLInitializationEvent event) {
         if (event.getSide() != Side.CLIENT) return;
         modules.init();
+        if (com.clientm.debug.ScreenshotTour.requested()) {
+            cpw.mods.fml.common.FMLCommonHandler.instance()
+                .bus()
+                .register(new com.clientm.debug.ScreenshotTour());
+        }
         LOG.info(
             "ClientM {} loaded with {} modules",
             Tags.VERSION,

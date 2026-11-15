@@ -101,6 +101,19 @@ public class ClientScreen extends GuiScreen {
         sliding = null;
     }
 
+    /** Jumps straight to a category's module cards. */
+    public void showMods(Category category) {
+        selected = category;
+        rebuildCards();
+        show(View.MODS);
+    }
+
+    /** Jumps straight to one module's options page. */
+    public void showSettings(Module module) {
+        settingsOf = module;
+        show(View.SETTINGS);
+    }
+
     private void rebuildCards() {
         cards.clear();
         for (Module m : ClientM.modules.all()) if (m.category == selected) cards.add(m);
