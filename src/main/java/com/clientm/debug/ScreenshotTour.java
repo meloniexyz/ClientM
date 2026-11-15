@@ -27,7 +27,8 @@ public final class ScreenshotTour {
     private boolean launched;
     private int menuTicks;
     private int step;
-    private int wait = "bench".equals(System.getenv("CLIENTM_TOUR")) ? 400 : 140;
+    private int wait = String.valueOf(System.getenv("CLIENTM_TOUR"))
+        .startsWith("bench") ? 400 : 140;
     private ClientScreen screen;
 
     public static boolean requested() {
@@ -108,6 +109,9 @@ public final class ScreenshotTour {
 
     // ---- CLIENTM_TOUR=bench: spin the camera once over 20 seconds and record every frame time.
     private boolean benching;
+    /** CLIENTM_TOUR=benchfly: like bench, but flying through new terrain. */
+    private static final boolean FLY = "benchfly".equals(System.getenv("CLIENTM_TOUR"));
+    private double flyX, flyY, flyZ;
     private long benchStart, lastFrame;
     private float baseYaw;
     private final int[] frameNanos = new int[400000];
@@ -126,6 +130,22 @@ public final class ScreenshotTour {
         if (frames < frameNanos.length) frameNanos[frames++] = (int) Math.min(Integer.MAX_VALUE, now - lastFrame);
         lastFrame = now;
         float secs = (now - benchStart) / 1e9f;
+        if (FLY) {
+            // Fly out in a straight line for 10 seconds and back for 10, so new chunks load the whole time.
+            if (flyY == 0) {
+                flyX = mc.thePlayer.posX;
+                flyZ = mc.thePlayer.posZ;
+                flyY = 110;
+            }
+            double along = (secs < 10f ? secs : 20f - secs) * 28.0;
+            mc.thePlayer.capabilities.isFlying = true;
+            mc.thePlayer.motionX = mc.thePlayer.motionY = mc.thePlayer.motionZ = 0;
+            mc.thePlayer.setPosition(flyX + along, flyY, flyZ);
+            mc.thePlayer.rotationYaw = mc.thePlayer.prevRotationYaw = secs < 10f ? -90f : 90f;
+            mc.thePlayer.rotationPitch = mc.thePlayer.prevRotationPitch = 15f;
+            if (secs >= 20f) finishBench(secs);
+            return;
+        }
         mc.thePlayer.rotationYaw = mc.thePlayer.prevRotationYaw = baseYaw + secs * 18f;
         mc.thePlayer.rotationPitch = mc.thePlayer.prevRotationPitch = 10f;
         if (secs >= 20f) finishBench(secs);
@@ -227,8 +247,25 @@ public final class ScreenshotTour {
             hitTest();
             return;
         }
-        if ("bench".equals(System.getenv("CLIENTM_TOUR"))) {
+        if ("bench".equals(System.getenv("CLIENTM_TOUR")) || FLY) {
             if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            if (FLY && mc.getIntegratedServer() != null) {
+                // Let the server-side player fly, or the server would pull the client back down.
+                for (Object o : mc.getIntegratedServer()
+                    .getConfigurationManager().playerEntityList) {
+                    net.minecraft.entity.player.EntityPlayerMP p = (net.minecraft.entity.player.EntityPlayerMP) o;
+                    p.capabilities.allowFlying = true;
+                    p.capabilities.isFlying = true;
+                    p.sendPlayerAbilities();
+                }
+                String speed = System.getenv("CLIENTM_BENCH_SPEED");
+                if (speed != null) {
+                    Module lazy = module("lazychunks");
+                    for (com.clientm.setting.Setting s : lazy.settings)
+                        if (s.id.equals("speed")) ((com.clientm.setting.IntSetting) s).set(Integer.parseInt(speed));
+                    lazy.onSettingsChanged();
+                }
+            }
             benching = true;
             return;
         }
