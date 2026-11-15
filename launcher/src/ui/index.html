@@ -43,6 +43,9 @@
   .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
   .play { background: var(--accent); color: var(--ink); font-weight: 800; font-size: 18px; border-radius: 12px; padding: 14px; width: 100%; }
   .play:hover:not(:disabled) { filter: brightness(1.08); }
+  .test { background: none; color: var(--text2); font-size: 12px; margin-top: 10px; padding: 2px; align-self: center; }
+  .test:hover:not(:disabled) { color: var(--text); }
+  .test span { color: var(--text3); margin-left: 6px; }
 
   .overlay { position: fixed; inset: 0; background: #000c; display: none; align-items: center; justify-content: center; }
   .overlay.show { display: flex; }
@@ -91,6 +94,7 @@
     <div class="status" id="status"></div>
     <div class="bar"><i id="bar"></i></div>
     <button class="play" id="playBtn">Play</button>
+    <button class="test" id="testBtn">Test without an account <span>singleplayer only</span></button>
   </div>
 
   <div class="overlay" id="loginDlg">

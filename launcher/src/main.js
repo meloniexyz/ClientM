@@ -96,16 +96,21 @@ ipcMain.handle('logout', () => {
   return state();
 });
 
-ipcMain.handle('play', async () => {
+// Test session: no account, so only singleplayer and servers that do not check accounts will work.
+const TEST_SESSION = { name: 'Player', uuid: '00000000000000000000000000000000', accessToken: '0' };
+
+ipcMain.handle('play', async (e, opts) => {
   if (game) throw new Error('The game is already running.');
   const s = readSettings();
-  const saved = readAccount();
-  if (!saved) throw new Error('Sign in first.');
-
-  send('progress', { text: 'Signing in', fraction: 0 });
-  const ms = await auth.refreshMicrosoft(s.azureClientId, saved.refreshToken);
-  const session = await auth.minecraftSession(ms.access_token);
-  writeAccount({ name: session.name, uuid: session.uuid, refreshToken: ms.refresh_token || saved.refreshToken });
+  let session = TEST_SESSION;
+  if (!(opts && opts.test)) {
+    const saved = readAccount();
+    if (!saved) throw new Error('Sign in first.');
+    send('progress', { text: 'Signing in', fraction: 0 });
+    const ms = await auth.refreshMicrosoft(s.azureClientId, saved.refreshToken);
+    session = await auth.minecraftSession(ms.access_token);
+    writeAccount({ name: session.name, uuid: session.uuid, refreshToken: ms.refresh_token || saved.refreshToken });
+  }
 
   const inst = await install(root, manifest, resourcesDir, (text, fraction) => send('progress', { text, fraction }));
   send('progress', { text: 'Starting Minecraft', fraction: 1 });

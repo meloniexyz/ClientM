@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('launcher', {
   login: () => ipcRenderer.invoke('login'),
   cancelLogin: () => ipcRenderer.invoke('login-cancel'),
   logout: () => ipcRenderer.invoke('logout'),
-  play: () => ipcRenderer.invoke('play'),
+  play: (opts) => ipcRenderer.invoke('play', opts),
   openFolder: () => ipcRenderer.invoke('open-folder'),
   openUrl: (url) => ipcRenderer.invoke('open-url', url),
   updateState: () => ipcRenderer.invoke('update-state'),

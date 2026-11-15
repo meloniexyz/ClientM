@@ -15,6 +15,7 @@ function render() {
   $('ver').textContent = 'Launcher ' + st.version;
   $('playBtn').disabled = busy || st.running || !st.account;
   $('playBtn').textContent = st.running ? 'Playing' : 'Play';
+  $('testBtn').disabled = busy || st.running;
   document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', +c.dataset.gb === st.heapGb));
   if (!busy && !st.running && !$('status').classList.contains('err')) {
     status(!st.clientIdSet ? 'Add your Azure client ID in Settings to enable sign-in.' : !st.account ? 'Sign in to play.' : '');
@@ -79,12 +80,12 @@ document.querySelectorAll('.chip').forEach((c) => {
 
 $('folderBtn').onclick = () => api.openFolder();
 
-$('playBtn').onclick = async () => {
+async function play(test) {
   busy = true;
   status('');
   render();
   try {
-    st = await api.play();
+    st = await api.play({ test });
     status('Minecraft is running.');
   } catch (e) {
     status(message(e), true);
@@ -92,7 +93,9 @@ $('playBtn').onclick = async () => {
   }
   busy = false;
   render();
-};
+}
+$('playBtn').onclick = () => play(false);
+$('testBtn').onclick = () => play(true);
 api.on('progress', (d) => {
   status(d.text);
   $('bar').style.width = Math.round(d.fraction * 100) + '%';
