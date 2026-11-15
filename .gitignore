@@ -102,3 +102,6 @@ addon.late.local.gradle.kts
 *.ipr
 *.iws
 layout.json
+
+# Prism Launcher instance pack (built locally)
+ClientM-Prism-*.zip

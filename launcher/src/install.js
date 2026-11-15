@@ -129,6 +129,28 @@ async function installMods(root, manifest, resourcesDir, progress) {
 }
 
 /**
+ * Hodgepodge's "direct tile entity array serialization" changes the format of one network packet. It only works
+ * when the server runs Hodgepodge too; on any other server the client misreads the packet and is disconnected.
+ * ClientM is for playing on ordinary servers, so it is always switched off here.
+ */
+async function fixServerCompatibility(gameDir) {
+  const file = path.join(gameDir, 'config', 'hodgepodge.cfg');
+  const key = 'B:directTileEntityArraySerialization=';
+  let text = null;
+  try {
+    text = await fsp.readFile(file, 'utf8');
+  } catch (e) {
+    // first launch: Hodgepodge fills in every other setting with its default when it loads this file
+  }
+  if (text === null) {
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(file, ['# Configuration file', '', 'speedups {', '    ' + key + 'false', '}', ''].join('\n'));
+  } else if (text.includes(key + 'true')) {
+    await fsp.writeFile(file, text.replace(key + 'true', key + 'false'));
+  }
+}
+
+/**
  * @param root          data folder (…\AppData\Roaming\ClientM\minecraft)
  * @param manifest      launcher/manifest.json
  * @param resourcesDir  folder holding mods/ClientM.jar
@@ -199,6 +221,7 @@ async function install(root, manifest, resourcesDir, progress) {
 
   const java = await installJava(root, manifest.javaMajor, progress);
   await installMods(root, manifest, resourcesDir, progress);
+  await fixServerCompatibility(path.join(root, 'game'));
   progress('Ready', 1);
 
   return { version, classpath, nativesDir, assetsDir, java, logConfig, logArgument: lf && lf.argument, gameDir: path.join(root, 'game') };
