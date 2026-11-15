@@ -285,7 +285,46 @@ public final class ScreenshotTour {
         }
     }
 
+    /** CLIENTM_TOUR=glass: a small glass wall in front of the player, vanilla and then with Clear Glass. */
+    private void glassTest() {
+        wait = 60;
+        Module m = module("clearglass");
+        net.minecraft.world.WorldServer world = mc.getIntegratedServer().worldServers[0];
+        int n = step++;
+        if (n == 0) {
+            world.setWorldTime(6000L);
+            m.setEnabled(false);
+            mc.thePlayer.rotationPitch = mc.thePlayer.prevRotationPitch = 0f;
+            net.minecraft.util.Vec3 look = mc.thePlayer.getLookVec();
+            glassX = (int) Math.floor(mc.thePlayer.posX + look.xCoord * 3);
+            glassY = (int) Math.floor(mc.thePlayer.posY) - 1;
+            glassZ = (int) Math.floor(mc.thePlayer.posZ + look.zCoord * 3);
+        }
+        if (n == 0 || n == 3) {
+            // A 3x3x3 block of glass with one stained corner column, removed again at the end.
+            for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
+                net.minecraft.block.Block b = n == 3 ? net.minecraft.init.Blocks.air
+                    : x == 1 && z == 1 ? net.minecraft.init.Blocks.stained_glass : net.minecraft.init.Blocks.glass;
+                world.setBlock(glassX + x, glassY + y, glassZ + z, b, b == net.minecraft.init.Blocks.air ? 0 : 14, 3);
+            }
+        }
+        if (n == 1) {
+            shot("glass-1-vanilla");
+            m.setEnabled(true);
+            mc.refreshResources();
+        }
+        if (n == 2) shot("glass-2-clear");
+        if (n == 3) m.setEnabled(false);
+        if (n == 4) mc.shutdown();
+    }
+
+    private int glassX, glassY, glassZ;
+
     private void advance() {
+        if ("glass".equals(System.getenv("CLIENTM_TOUR"))) {
+            glassTest();
+            return;
+        }
         if ("nametag".equals(System.getenv("CLIENTM_TOUR"))) {
             nametagTest();
             return;

@@ -17,7 +17,8 @@
     "MixinGui_TexturedRect",
     "MixinRender_NametagBox",
     "MixinRendererLivingEntity_NametagBox",
-    "MixinRenderBlocks_HideFoliage"
+    "MixinRenderBlocks_HideFoliage",
+    "MixinTextureAtlasSprite_ClearGlass"
   ],
   "server": []
 }

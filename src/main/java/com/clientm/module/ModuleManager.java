@@ -24,6 +24,7 @@ import com.clientm.compat.PerformancePreset;
 import com.clientm.gui.ClientScreen;
 import com.clientm.module.impl.ArmourStatusModule;
 import com.clientm.module.impl.ChunkLoadingModule;
+import com.clientm.module.impl.ClearGlassModule;
 import com.clientm.module.impl.CoordinatesModule;
 import com.clientm.module.impl.CpsModule;
 import com.clientm.module.impl.FpsModule;
@@ -86,6 +87,7 @@ public class ModuleManager {
         register(new HideFoliageModule());
         register(new ChunkLoadingModule());
         register(new TexturedBackgroundsModule());
+        register(new ClearGlassModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
