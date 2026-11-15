@@ -1,0 +1,27 @@
+{
+  "comment": "Everything the launcher downloads besides Mojang's own files. Sizes and SHA-256 are checked after download.",
+  "versionJson": {
+    "url": "https://github.com/GTNewHorizons/lwjgl3ify/releases/download/3.0.33/version.json",
+    "size": 73777,
+    "sha256": "90b5bf2a5a5dad32a9a35c52db6c1a96ee53100e724c3e961602ee972052e469"
+  },
+  "javaMajor": 21,
+  "mods": [
+    { "file": "angelica-2.2.46.jar", "size": 13038579, "sha256": "4561602f0594ec84dd76fcfe7606d2ea47bb12fffd7f02a9a411ecd187b06f7a", "url": "https://github.com/GTNewHorizons/Angelica/releases/download/2.2.46/angelica-2.2.46.jar" },
+    { "file": "hodgepodge-2.7.197.jar", "size": 1157502, "sha256": "e9c7553e021f5b7ae5dd5e6741b538334aa5f0f98cfab5e085486af9c35909d2", "url": "https://github.com/GTNewHorizons/Hodgepodge/releases/download/2.7.197/hodgepodge-2.7.197.jar" },
+    { "file": "gtnhlib-0.11.48.jar", "size": 1424495, "sha256": "3f79882cb6e41e6eafa4c47414acae6093bbed87eb713b61fc14e7948cf17a2e", "url": "https://github.com/GTNewHorizons/GTNHLib/releases/download/0.11.48/gtnhlib-0.11.48.jar" },
+    { "file": "gtnhextlib-1.1.0.jar", "size": 25359846, "sha256": "1eb0d83e67aa7519e7f8318c247859256ae62e7ab13c29cd5075a9f7870bd147", "url": "https://github.com/GTNewHorizons/GTNHExtLib/releases/download/1.1.0/gtnhextlib-1.1.0.jar" },
+    { "file": "+unimixins-all-1.7.10-0.3.1.jar", "size": 5519796, "sha256": "ad0ea4f92daf7bf7ec5c10e16258425e47929126954aea5d80df69ce26cd7318", "url": "https://github.com/LegacyModdingMC/UniMixins/releases/download/0.3.1/%2Bunimixins-all-1.7.10-0.3.1.jar" },
+    { "file": "lwjgl3ify-3.0.33.jar", "size": 8266932, "sha256": "e6763321e86d2f82685adbe33f02fe9a090029d39b9ac1f0ce6928477cdbd673", "url": "https://github.com/GTNewHorizons/lwjgl3ify/releases/download/3.0.33/lwjgl3ify-3.0.33.jar" }
+  ],
+  "jvmFlags": [
+    "-XX:+UseG1GC",
+    "-XX:MaxGCPauseMillis=30",
+    "-XX:+UnlockExperimentalVMOptions",
+    "-XX:G1NewSizePercent=30",
+    "-XX:+AlwaysPreTouch",
+    "-XX:+DisableExplicitGC",
+    "-XX:+ParallelRefProcEnabled"
+  ],
+  "defaultHeapGb": 3
+}

@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClientM menu styles</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0c0c10; color: #e8e8ee; font: 14px/1.45 'Segoe UI', system-ui, sans-serif; padding: 24px 16px 60px; }
+  .page { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  .lead { color: #9a9aa8; margin-bottom: 28px; }
+  h2 { font-size: 18px; margin: 34px 0 10px; }
+  h2 span { color: #8a8a98; font-weight: 400; font-size: 14px; margin-left: 8px; }
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 12px; }
+  .notes div { background: #15151b; border: 1px solid #24242e; border-radius: 8px; padding: 10px 12px; color: #b4b4c0; font-size: 13px; }
+  .notes b { display: block; color: #e8e8ee; margin-bottom: 2px; }
+  .fit { width: 100%; overflow: hidden; border-radius: 6px; border: 1px solid #2a2a34; }
+  .screen { width: 960px; height: 540px; position: relative; overflow: hidden; transform-origin: 0 0; user-select: none; }
+
+  /* fake game scene, shared by all three */
+  .scene { position: absolute; inset: 0;
+    background:
+      linear-gradient(#0000 61%, #0003 61%, #0000 75%),
+      repeating-linear-gradient(90deg, #0000 0 46px, #0002 46px 48px),
+      linear-gradient(#86b6ff 0, #c4dcff 46%, #3f7a35 46%, #4f9442 50%, #5aa34a 61%, #6b4a2e 61%, #5a3d25 100%); }
+  .scene:after { content: ''; position: absolute; left: 0; right: 0; top: 30%; height: 16%;
+    background: linear-gradient(135deg, #0000 25%, #2f6a2b 25% 50%, #0000 50%) 0 0/190px 100%, linear-gradient(225deg, #0000 25%, #357530 25% 50%, #0000 50%) 60px 0/260px 100%; opacity: .9; }
+  .dim { position: absolute; inset: 0; background: #000; opacity: .45; }
+  .hud { position: absolute; background: #0000006f; color: #fff; font: 700 13px Consolas, monospace; padding: 3px 6px; }
+  .hotbar { position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); display: flex; border: 2px solid #111; background: #0008; }
+  .hotbar i { width: 34px; height: 34px; border: 2px solid #8b8b8b; }
+  .hotbar i:first-child { border-color: #fff; }
+
+  /* shared bits */
+  .tog { display: inline-block; vertical-align: middle; width: 30px; height: 16px; border-radius: 9px; background: #3a3a46; position: relative; flex: none; }
+  .tog:after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #c9c9d4; }
+  .tog.on:after { left: 16px; background: #fff; }
+
+  /* 1 ProjectM */
+  .pm { position: absolute; left: 120px; top: 62px; width: 720px; height: 416px; background: #000000e6; border: 1px solid #22222c; border-radius: 12px; display: flex; overflow: hidden; }
+  .pm .side { width: 168px; padding: 14px 10px; border-right: 1px solid #22222c; display: flex; flex-direction: column; gap: 4px; }
+  .pm .brand { font-weight: 800; font-size: 17px; padding: 2px 8px 12px; }
+  .pm .brand em { color: #ff4d5e; font-style: normal; }
+  .pm .cat { padding: 8px 10px; border-radius: 8px; color: #a3a3b2; display: flex; justify-content: space-between; font-size: 13px; }
+  .pm .cat.on { background: #ff4d5e22; color: #ff4d5e; font-weight: 600; }
+  .pm .cat small { color: #6c6c7c; }
+  .pm .side .sp { flex: 1; }
+  .pm .edit { background: #ff4d5e; color: #0c0a18; font-weight: 700; text-align: center; padding: 8px; border-radius: 8px; font-size: 13px; }
+  .pm .main { flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .pm .search { background: #17171e; border-radius: 99px; padding: 7px 14px; color: #6c6c7c; font-size: 13px; }
+  .pm .chips { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #6c6c7c; }
+  .pm .chips b { background: #17171e; color: #a3a3b2; font-weight: 500; padding: 4px 11px; border-radius: 99px; }
+  .pm .chips b.on { background: #a99dff; color: #0c0a18; font-weight: 700; }
+  .pm .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .pm .card { background: #111116; border: 1px solid #22222c; border-radius: 10px; padding: 10px 11px; height: 74px; display: flex; flex-direction: column; justify-content: space-between; }
+  .pm .card.on { border-color: #ff4d5e66; }
+  .pm .card p { font-weight: 600; font-size: 13px; }
+  .pm .card small { color: #6c6c7c; font-size: 11px; }
+  .pm .card div { display: flex; justify-content: space-between; align-items: center; }
+  .pm .tog.on { background: #ff4d5e; }
+  .pm .gear { color: #6c6c7c; font-size: 12px; }
+
+  /* 2 CheatBreaker-style layout */
+  .cb .logo { position: absolute; left: 0; right: 0; top: 96px; display: flex; justify-content: center; align-items: center; gap: 10px; font-weight: 300; font-size: 17px; letter-spacing: .14em; }
+  .cb .logo i { width: 26px; height: 26px; background: #e0a526; color: #111; font: 900 18px/26px 'Segoe UI', sans-serif; text-align: center; letter-spacing: 0; font-style: normal; }
+  .cb .logo b { font-weight: 800; }
+  .cb .row { position: absolute; left: 0; right: 0; top: 138px; display: flex; justify-content: center; gap: 6px; }
+  .cb .row span { background: #1a1a1dee; height: 40px; display: flex; align-items: center; justify-content: center; color: #cfcfd4; }
+  .cb .row .ic { width: 40px; font-size: 18px; }
+  .cb .row .mods { width: 150px; font-weight: 700; letter-spacing: .08em; border-bottom: 2px solid #e0a526; color: #fff; }
+  .cb .slab { position: absolute; left: 190px; top: 190px; width: 580px; height: 270px; background: #161618f2; display: flex; }
+  .cb .rail { width: 132px; background: #101012; padding: 8px 0; font-size: 12px; letter-spacing: .06em; }
+  .cb .rail div { padding: 8px 14px; color: #8c8c94; border-left: 2px solid #0000; }
+  .cb .rail div.on { color: #fff; border-left-color: #e0a526; background: #1c1c20; }
+  .cb .list { flex: 1; padding: 10px 22px 10px 16px; position: relative; font-size: 12px; letter-spacing: .05em; }
+  .cb .sec { color: #8c8c94; border-bottom: 1px solid #3a3a40; padding: 3px 0; margin: 4px 0 4px; width: 62%; }
+  .cb .opt { display: flex; align-items: center; justify-content: space-between; padding: 5px 0 5px 10px; color: #e4e4e8; }
+  .cb .sel { display: flex; gap: 16px; align-items: center; color: #8c8c94; width: 120px; justify-content: space-between; }
+  .cb .sel b { color: #fff; font-weight: 600; }
+  .cb .sel b.off { color: #8c8c94; }
+  .cb .hex { display: flex; gap: 10px; align-items: center; }
+  .cb .hex i { width: 18px; height: 18px; border: 1px solid #fff8; }
+  .cb .hex span { border-bottom: 1px solid #55555c; width: 120px; padding-bottom: 1px; color: #cfcfd4; }
+  .cb .bar { position: absolute; right: 7px; top: 14px; width: 3px; height: 96px; background: #e0a526; }
+  .cb .corner { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 6px; }
+  .cb .corner span { width: 44px; height: 38px; background: #1a1a1dee; display: flex; align-items: center; justify-content: center; color: #cfcfd4; font-size: 12px; }
+  .cb .hint { position: absolute; right: 12px; bottom: 12px; color: #fffa; font-size: 11px; letter-spacing: .05em; }
+
+  /* 3 Feishin */
+  .fe { position: absolute; left: 0; top: 0; bottom: 0; width: 610px; background: #0d0d10f5; display: flex; flex-direction: column; border-right: 1px solid #ffffff14; font-family: Inter, 'Segoe UI', sans-serif; letter-spacing: -.005em; }
+  .fe .body { flex: 1; display: flex; min-height: 0; }
+  .fe .side { width: 168px; padding: 14px 10px; border-right: 1px solid #ffffff0f; }
+  .fe .side h4 { font-size: 14px; font-weight: 700; padding: 4px 10px 6px; }
+  .fe .side h4:not(:first-child) { margin-top: 14px; }
+  .fe .it { padding: 6px 10px; border-radius: 5px; font-weight: 500; font-size: 13px; display: flex; justify-content: space-between; }
+  .fe .it.on { background: #ffffff14; font-weight: 600; }
+  .fe .it small { color: #77778a; }
+  .fe .main { flex: 1; background: #131318; padding: 16px 18px; min-width: 0; }
+  .fe .main h3 { font-size: 26px; font-weight: 800; letter-spacing: -.03em; }
+  .fe .sub { color: #8a8a9a; font-size: 12px; margin-bottom: 12px; }
+  .fe table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .fe th { text-align: left; color: #77778a; font-weight: 500; font-size: 11px; padding: 5px 6px; border-bottom: 1px solid #ffffff14; }
+  .fe td { padding: 7px 6px; border-bottom: 1px solid #ffffff0a; }
+  .fe td small { color: #77778a; }
+  .fe tr.sel td { background: #ffffff0d; }
+  .fe .tog.on { background: #3574fc; }
+  .fe td:last-child, .fe th:last-child { width: 44px; }
+  .fe .foot { height: 54px; background: #0b0b0b; border-top: 1px solid #ffffff14; display: flex; align-items: center; gap: 12px; padding: 0 14px; font-size: 12px; }
+  .fe .seg { display: flex; border: 1px solid #ffffff1f; border-radius: 5px; overflow: hidden; }
+  .fe .seg b { padding: 5px 10px; font-weight: 500; color: #a3a3b2; border-right: 1px solid #ffffff14; }
+  .fe .seg b:last-child { border: 0; }
+  .fe .seg b.on { background: #3574fc; color: #fff; font-weight: 600; }
+  .fe .foot .sp { flex: 1; }
+  .fe .btn { border: 1px solid #ffffff1f; border-radius: 5px; padding: 5px 12px; font-weight: 600; }
+  /* 4 mix: CheatBreaker-style layout, ProjectM colours and shapes */
+  .mx .logo { position: absolute; left: 0; right: 0; top: 70px; text-align: center; font-weight: 800; font-size: 24px; }
+  .mx .logo em { color: #ff4d5e; font-style: normal; }
+  .mx .row { position: absolute; left: 0; right: 0; top: 112px; display: flex; justify-content: center; gap: 8px; }
+  .mx .row span { background: #000000e6; border: 1px solid #22222c; border-radius: 10px; height: 40px; display: flex; align-items: center; justify-content: center; color: #a3a3b2; }
+  .mx .row .ic { width: 40px; font-size: 17px; }
+  .mx .row .mods { width: 150px; font-weight: 700; background: #ff4d5e; border-color: #ff4d5e; color: #0c0a18; }
+  .mx .slab { position: absolute; left: 180px; top: 166px; width: 600px; height: 300px; background: #000000e6; border: 1px solid #22222c; border-radius: 12px; display: flex; overflow: hidden; }
+  .mx .rail { width: 150px; padding: 10px 8px; border-right: 1px solid #22222c; font-size: 13px; display: flex; flex-direction: column; gap: 2px; }
+  .mx .rail div { padding: 6px 10px; border-radius: 8px; color: #a3a3b2; display: flex; justify-content: space-between; align-items: center; }
+  .mx .rail div.on { background: #ff4d5e22; color: #ff4d5e; font-weight: 600; }
+  .mx .rail i { width: 6px; height: 6px; border-radius: 50%; background: #3a3a46; }
+  .mx .rail i.on { background: #ff4d5e; }
+  .mx .list { flex: 1; padding: 12px 22px 12px 16px; position: relative; font-size: 13px; }
+  .mx .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .mx .head p { font-weight: 700; font-size: 16px; }
+  .mx .head small { color: #6c6c7c; font-weight: 400; font-size: 12px; margin-left: 8px; }
+  .mx .sec { color: #6c6c7c; font-size: 11px; font-weight: 600; margin: 8px 0 2px; }
+  .mx .opt { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: 8px; }
+  .mx .opt:nth-child(even) { background: #111116; }
+  .mx .tog.on { background: #ff4d5e; }
+  .mx .hex { display: flex; gap: 8px; align-items: center; }
+  .mx .hex i { width: 16px; height: 16px; border-radius: 50%; border: 1px solid #ffffff55; }
+  .mx .hex span { background: #17171e; border-radius: 99px; padding: 2px 10px; color: #a3a3b2; font: 12px Consolas, monospace; }
+  .mx .bar { position: absolute; right: 7px; top: 48px; width: 3px; height: 90px; border-radius: 2px; background: #ff4d5e; }
+  .mx .chips { position: absolute; left: 0; right: 0; top: 478px; display: flex; justify-content: center; gap: 6px; font-size: 12px; }
+  .mx .chips b { background: #000000e6; border: 1px solid #22222c; color: #a3a3b2; font-weight: 500; padding: 5px 13px; border-radius: 99px; }
+  .mx .chips b.on { background: #a99dff; border-color: #a99dff; color: #0c0a18; font-weight: 700; }
+  .mx .corner { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 6px; font-size: 12px; }
+  .mx .corner span { padding: 9px 13px; background: #000000e6; border: 1px solid #22222c; border-radius: 10px; color: #a3a3b2; }
+  .mx .box { outline: 1px dashed #ff4d5e; border-radius: 4px; }
+  .mx .hint { position: absolute; right: 12px; bottom: 14px; color: #fffa; font-size: 12px; }
+  .live { position: absolute; right: 14px; top: 12px; color: #fffc; font-size: 11px; background: #0008; padding: 3px 8px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>ClientM menu: three style demos</h1>
+  <p class="lead">Mockups only. Nothing here is in the mod yet. Each is drawn over a stand-in game scene at 960×540, and each uses only flat rectangles and text so it stays cheap to draw in game.</p>
+
+  <h2>1. ProjectM / Negusify style <span>floating rounded card, red accent</span></h2>
+  <div class="fit"><div class="screen">
+    <div class="scene"></div><div class="dim"></div>
+    <div class="hud" style="left:8px;top:8px">412 FPS</div>
+    <div class="hotbar"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="pm">
+      <div class="side">
+        <div class="brand">Client<em>M</em></div>
+        <div class="cat on">HUD <small>6</small></div>
+        <div class="cat">Visual <small>2</small></div>
+        <div class="cat">Movement <small>1</small></div>
+        <div class="cat">Performance <small>3</small></div>
+        <div class="sp"></div>
+        <div class="edit">Edit HUD layout</div>
+      </div>
+      <div class="main">
+        <div class="search">Search mods…</div>
+        <div class="chips">Preset <b>Potato</b><b class="on">Low</b><b>Balanced</b><b>High</b><b>Fancy</b></div>
+        <div class="grid">
+          <div class="card on"><div><p>FPS</p><span class="tog on"></span></div><div><small>Frames per second</small><span class="gear">⚙</span></div></div>
+          <div class="card"><div><p>CPS</p><span class="tog"></span></div><div><small>Clicks per second</small><span class="gear">⚙</span></div></div>
+          <div class="card"><div><p>Coordinates</p><span class="tog"></span></div><div><small>Position and facing</small><span class="gear">⚙</span></div></div>
+          <div class="card on"><div><p>Keystrokes</p><span class="tog on"></span></div><div><small>WASD and mouse</small><span class="gear">⚙</span></div></div>
+          <div class="card"><div><p>Potion Status</p><span class="tog"></span></div><div><small>Active effects</small><span class="gear">⚙</span></div></div>
+          <div class="card on"><div><p>Armour Status</p><span class="tog on"></span></div><div><small>Durability</small><span class="gear">⚙</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <div class="notes">
+    <div><b>Feels like</b>Your music app: black card, rounded corners, pill switches, red for "on", purple for the active preset.</div>
+    <div><b>Good for Minecraft</b>Search box and preset chips are always one click away. Six mods per page, no scrolling for HUD.</div>
+    <div><b>Draw cost</b>Rounded corners need one small corner texture. No blur, no shadows. About 60 rectangles per frame.</div>
+  </div>
+
+  <h2>2. CheatBreaker-style layout <span>centre buttons, dark slab, arrow selectors</span></h2>
+  <div class="fit"><div class="screen cb">
+    <div class="scene"></div><div class="dim" style="opacity:.3"></div>
+    <div class="hud" style="left:8px;top:8px;outline:1px solid #fff8">412 FPS</div>
+    <div class="hud" style="right:8px;top:200px;outline:1px solid #fff8">X 104  Y 64  Z -220</div>
+    <div class="hotbar"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="logo"><i>M</i><span>CLIENT<b>M</b></span></div>
+    <div class="row"><span class="ic">☰</span><span class="mods">MODS</span><span class="ic">⚙</span></div>
+    <div class="slab">
+      <div class="rail"><div class="on">FPS</div><div>CPS</div><div>COORDINATES</div><div>KEYSTROKES</div><div>POTIONS</div><div>ARMOUR</div><div>GLINT</div><div>PRESETS</div></div>
+      <div class="list">
+        <div class="sec">⌄ GENERAL</div>
+        <div class="opt">ENABLED<div class="sel">‹<b>ON</b>›</div></div>
+        <div class="opt">SHOW BACKGROUND<div class="sel">‹<b>ON</b>›</div></div>
+        <div class="opt">SHOW BORDER<div class="sel">‹<b class="off">OFF</b>›</div></div>
+        <div class="opt">SHOW MINIMUM FPS<div class="sel">‹<b class="off">OFF</b>›</div></div>
+        <div class="sec">⌄ COLOURS</div>
+        <div class="opt">TEXT COLOUR<div class="hex"><i style="background:#fff"></i><span>#ffffffff</span></div></div>
+        <div class="opt">BACKGROUND COLOUR<div class="hex"><i style="background:#000"></i><span>#6f000000</span></div></div>
+        <div class="bar"></div>
+      </div>
+    </div>
+    <div class="corner"><span>HIDE</span><span>HELP</span><span>RESET</span></div>
+    <div class="hint">DRAG ANY HUD BOX TO MOVE IT</div>
+  </div></div>
+  <div class="notes">
+    <div><b>Feels like</b>The screenshot you saw: buttons in the middle, one dark panel under them, the game and HUD boxes visible all around.</div>
+    <div><b>Changed for convenience</b>Mod list sits in a left rail so settings are one click, not two. Clicking the value itself toggles it, not only the tiny arrows. ClientM's own mark and gold accent, not CheatBreaker's logo.</div>
+    <div><b>Draw cost</b>Lowest of the three. Square corners only, about 40 rectangles per frame, and the HUD can be dragged without leaving the menu.</div>
+  </div>
+
+  <h2>3. Feishin style <span>flat docked panel, hairlines, blue accent</span></h2>
+  <div class="fit"><div class="screen">
+    <div class="scene"></div>
+    <div class="hud" style="right:14px;top:44px">412 FPS</div>
+    <div class="hud" style="right:14px;top:70px">X 104  Y 64  Z -220</div>
+    <div class="live">Live preview</div>
+    <div class="fe">
+      <div class="body">
+        <div class="side">
+          <h4>Mods</h4>
+          <div class="it on">HUD <small>6</small></div>
+          <div class="it">Visual <small>2</small></div>
+          <div class="it">Movement <small>1</small></div>
+          <div class="it">Performance <small>3</small></div>
+          <h4>Layout</h4>
+          <div class="it">Edit HUD</div>
+          <div class="it">Reset positions</div>
+        </div>
+        <div class="main">
+          <h3>HUD</h3>
+          <div class="sub">6 mods · 3 enabled</div>
+          <table>
+            <tr><th>Mod</th><th>Shows</th><th>On</th></tr>
+            <tr class="sel"><td>FPS</td><td><small>Frames per second</small></td><td><span class="tog on"></span></td></tr>
+            <tr><td>CPS</td><td><small>Clicks per second</small></td><td><span class="tog"></span></td></tr>
+            <tr><td>Coordinates</td><td><small>Position and facing</small></td><td><span class="tog on"></span></td></tr>
+            <tr><td>Keystrokes</td><td><small>WASD and mouse buttons</small></td><td><span class="tog"></span></td></tr>
+            <tr><td>Potion Status</td><td><small>Active effects and timers</small></td><td><span class="tog"></span></td></tr>
+            <tr><td>Armour Status</td><td><small>Durability of worn armour</small></td><td><span class="tog on"></span></td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="foot">Preset
+        <div class="seg"><b>Potato</b><b class="on">Low</b><b>Balanced</b><b>High</b><b>Fancy</b></div>
+        <div class="sp"></div><div class="btn">Done</div>
+      </div>
+    </div>
+  </div></div>
+  <div class="notes">
+    <div><b>Feels like</b>ProjectM's Feishin theme: edge-to-edge panes, thin divider lines, big bold page title, a list instead of cards, preset bar where the player bar would be.</div>
+    <div><b>Changed for Minecraft</b>Docked to the left 64% of the screen, not full-window, so the right side stays a live view of the game and you see each toggle take effect.</div>
+    <div><b>Draw cost</b>Low. Flat rectangles and 1-pixel lines. The switches are the only rounded part.</div>
+  </div>
+
+  <h2>4. Mix <span>CheatBreaker-style layout, ProjectM colours and shapes</span></h2>
+  <div class="fit"><div class="screen mx">
+    <div class="scene"></div><div class="dim" style="opacity:.35"></div>
+    <div class="hud box" style="left:8px;top:8px">412 FPS</div>
+    <div class="hud box" style="right:8px;top:210px">X 104  Y 64  Z -220</div>
+    <div class="logo">Client<em>M</em></div>
+    <div class="row"><span class="ic">☰</span><span class="mods">Mods</span><span class="ic">⚙</span></div>
+    <div class="slab">
+      <div class="rail">
+        <div class="on">FPS <i class="on"></i></div><div>CPS <i></i></div><div>Coordinates <i class="on"></i></div><div>Keystrokes <i></i></div>
+        <div>Potion Status <i></i></div><div>Armour Status <i class="on"></i></div><div>Toggle Sprint <i class="on"></i></div><div>Glint <i class="on"></i></div>
+      </div>
+      <div class="list">
+        <div class="head"><p>FPS<small>Frames per second</small></p><span class="tog on"></span></div>
+        <div class="sec">General</div>
+        <div class="opt">Show background<span class="tog on"></span></div>
+        <div class="opt">Show border<span class="tog"></span></div>
+        <div class="opt">Show minimum FPS<span class="tog"></span></div>
+        <div class="sec">Colours</div>
+        <div class="opt">Text colour<div class="hex"><i style="background:#fff"></i><span>#ffffffff</span></div></div>
+        <div class="opt">Background colour<div class="hex"><i style="background:#000"></i><span>#6f000000</span></div></div>
+        <div class="bar"></div>
+      </div>
+    </div>
+    <div class="chips"><b>Potato</b><b class="on">Low</b><b>Balanced</b><b>High</b><b>Fancy</b></div>
+    <div class="corner"><span>Hide</span><span>Help</span><span>Reset</span></div>
+    <div class="hint">Drag any HUD box to move it</div>
+  </div></div>
+  <div class="notes">
+    <div><b>From CheatBreaker's layout</b>Name and three buttons in the centre, one panel under them, the game visible all round, HUD boxes draggable while the menu is open.</div>
+    <div><b>From ProjectM</b>Black rounded panels, red for "on", purple for the active preset, pill switches, sentence-case text.</div>
+    <div><b>Draw cost</b>Same as style 1: one small corner texture for the rounding, about 50 rectangles per frame, no blur.</div>
+  </div>
+</div>
+<script>
+  function fit() {
+    document.querySelectorAll('.fit').forEach(function (f) {
+      var s = Math.min(1, f.clientWidth / 960), sc = f.firstElementChild;
+      sc.style.transform = 'scale(' + s + ')';
+      f.style.height = 540 * s + 'px';
+    });
+  }
+  // menu-styles.html#2 shows only the second demo, edge to edge (used for taking pictures).
+  var only = parseInt(location.hash.slice(1), 10);
+  if (only) {
+    var keep = document.querySelectorAll('.fit')[only - 1];
+    document.body.style.cssText = 'padding:0;overflow:hidden';
+    document.body.replaceChildren(keep);
+    keep.style.cssText = 'border:0;border-radius:0';
+  }
+  addEventListener('resize', fit); fit();
+</script>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>ClientM</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --bg: #000; --panel: #0b0b0f; --line: #22222c; --row: #111116; --text: #ededf2; --text2: #a3a3b2; --text3: #6c6c7c; --accent: #ff4d5e; --ink: #0c0a18; --preset: #a99dff; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.45 'Segoe UI', system-ui, sans-serif; display: flex; user-select: none; overflow: hidden; }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .5; }
+
+  .side { width: 250px; border-right: 1px solid var(--line); padding: 26px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .logo { font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
+  .logo em { color: var(--accent); font-style: normal; }
+  .tag { color: var(--text3); font-size: 12px; margin-top: -12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .card small { color: var(--text3); display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+  .card b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link { background: none; color: var(--text2); font-size: 12px; margin-top: 8px; padding: 0; }
+  .link:hover { color: var(--accent); }
+  .sp { flex: 1; }
+  .ghost { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; color: var(--text2); font-size: 13px; text-align: left; }
+  .ghost:hover { color: var(--text); border-color: #33333f; }
+  .ver { color: var(--text3); font-size: 11px; }
+
+  .main { flex: 1; padding: 26px 28px 22px; display: flex; flex-direction: column; min-width: 0; }
+  h2 { font-size: 20px; font-weight: 700; }
+  .sub { color: var(--text3); font-size: 13px; margin-bottom: 16px; }
+  .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .fact { background: var(--row); border-radius: 10px; padding: 10px 12px; }
+  .fact small { color: var(--text3); font-size: 11px; display: block; }
+  .heap { display: flex; gap: 6px; margin-top: 14px; align-items: center; color: var(--text3); font-size: 12px; }
+  .chip { background: var(--panel); border: 1px solid var(--line); color: var(--text2); border-radius: 99px; padding: 4px 13px; font-size: 12px; }
+  .chip.on { background: var(--preset); border-color: var(--preset); color: var(--ink); font-weight: 700; }
+  .status { color: var(--text2); font-size: 13px; min-height: 20px; margin-bottom: 8px; }
+  .status.err { color: var(--accent); }
+  .bar { height: 4px; border-radius: 2px; background: var(--row); overflow: hidden; margin-bottom: 14px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  .play { background: var(--accent); color: var(--ink); font-weight: 800; font-size: 18px; border-radius: 12px; padding: 14px; width: 100%; }
+  .play:hover:not(:disabled) { filter: brightness(1.08); }
+
+  .overlay { position: fixed; inset: 0; background: #000c; display: none; align-items: center; justify-content: center; }
+  .overlay.show { display: flex; }
+  .dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; width: 440px; }
+  .dialog h3 { font-size: 17px; margin-bottom: 6px; }
+  .dialog p { color: var(--text2); font-size: 13px; margin-bottom: 12px; }
+  .code { font: 700 30px Consolas, monospace; letter-spacing: .12em; text-align: center; background: var(--row); border-radius: 10px; padding: 12px; margin-bottom: 12px; user-select: text; }
+  .rowbtn { display: flex; gap: 8px; justify-content: flex-end; }
+  .primary { background: var(--accent); color: var(--ink); font-weight: 700; border-radius: 10px; padding: 8px 16px; }
+  input { width: 100%; background: var(--row); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; color: var(--text); font: 13px Consolas, monospace; margin-bottom: 12px; outline: none; }
+  input:focus { border-color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="side">
+    <div class="logo">Client<em>M</em></div>
+    <div class="tag">Minecraft 1.7.10</div>
+    <div class="card">
+      <small>ACCOUNT</small>
+      <b id="accName">Not signed in</b>
+      <button class="link" id="accBtn">Sign in with Microsoft</button>
+    </div>
+    <div class="sp"></div>
+    <button class="ghost" id="folderBtn">Open game folder</button>
+    <button class="ghost" id="settingsBtn">Settings</button>
+    <div class="ver" id="ver"></div>
+  </div>
+
+  <div class="main">
+    <h2>Ready to play</h2>
+    <div class="sub">The fastest setup measured on this client is used by default.</div>
+    <div class="facts">
+      <div class="fact"><small>Java</small>21, with tuned memory flags</div>
+      <div class="fact"><small>Renderer</small>Angelica on OpenGL</div>
+      <div class="fact"><small>Graphics library</small>LWJGL 3</div>
+      <div class="fact"><small>Video preset on first launch</small>Low (max FPS)</div>
+    </div>
+    <div class="heap">Memory
+      <button class="chip" data-gb="2">2 GB</button>
+      <button class="chip" data-gb="3">3 GB</button>
+      <button class="chip" data-gb="4">4 GB</button>
+      <button class="chip" data-gb="6">6 GB</button>
+    </div>
+    <div class="sp"></div>
+    <div class="status" id="status"></div>
+    <div class="bar"><i id="bar"></i></div>
+    <button class="play" id="playBtn">Play</button>
+  </div>
+
+  <div class="overlay" id="loginDlg">
+    <div class="dialog">
+      <h3>Sign in with Microsoft</h3>
+      <p>Open the Microsoft page in your browser and type this code. Your password is entered there, never in this launcher.</p>
+      <div class="code" id="loginCode">········</div>
+      <div class="rowbtn">
+        <button class="ghost" id="loginCancel">Cancel</button>
+        <button class="primary" id="loginOpen">Open Microsoft page</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="settingsDlg">
+    <div class="dialog">
+      <h3>Settings</h3>
+      <p>Azure application (client) ID used for Microsoft sign-in. It must be registered by you and approved by Mojang for the Minecraft API.</p>
+      <input id="clientId" placeholder="00000000-0000-0000-0000-000000000000" spellcheck="false">
+      <div class="rowbtn">
+        <button class="ghost" id="settingsCancel">Cancel</button>
+        <button class="primary" id="settingsSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

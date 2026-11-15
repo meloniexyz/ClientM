@@ -1,0 +1,35 @@
+{
+  "name": "clientm-launcher",
+  "productName": "ClientM",
+  "version": "0.1.0",
+  "description": "Launcher for the ClientM Minecraft 1.7.10 client",
+  "author": "meloniexyz",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "copy-mod": "node scripts/copy-mod.js",
+    "dist": "node scripts/copy-mod.js && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16"
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.clientm.launcher",
+    "productName": "ClientM",
+    "directories": { "output": "dist" },
+    "files": ["src/**", "manifest.json", "package.json"],
+    "extraResources": [{ "from": "resources", "to": "." }],
+    "win": { "target": "nsis", "icon": "build/icon.png" },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "ClientM",
+      "artifactName": "ClientM-Setup-${version}.exe"
+    }
+  }
+}

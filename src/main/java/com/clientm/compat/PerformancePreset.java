@@ -103,6 +103,8 @@ public enum PerformancePreset {
             a |= AngelicaBridge.set("performance", "useCompactVertexFormat", true);
             a |= AngelicaBridge.set("performance", "useRenderPassOptimization", true);
             a |= AngelicaBridge.set("performance", "useNoErrorGLContext", true);
+            // Angelica has its own VSync switch, on by default, which caps FPS at the monitor refresh rate.
+            a |= AngelicaBridge.set("advanced", "vsyncMode", "OFF");
             // Quality features that cost chunk-build or GPU time
             a |= rendererChanged |= AngelicaBridge.set("performance", "translucencySorting", translucencySorting);
             a |= rendererChanged |= AngelicaBridge.set("quality", "biomeBlendRadius", biomeBlend);
@@ -111,6 +113,7 @@ public enum PerformancePreset {
             a |= texturesChanged |= AngelicaBridge.set("quality", "textureFilterMode", textureFilter);
             if (a) AngelicaBridge.save();
         }
+        Display.setVSyncEnabled(false);
 
         if (texturesChanged) mc.scheduleResourcesRefresh();
         else if (rendererChanged && mc.theWorld != null && mc.renderGlobal != null) mc.renderGlobal.loadRenderers();
