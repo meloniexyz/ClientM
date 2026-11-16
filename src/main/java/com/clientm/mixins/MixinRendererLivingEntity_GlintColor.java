@@ -4,8 +4,6 @@ import net.minecraft.client.renderer.entity.RendererLivingEntity;
 
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Constant;
-import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.Slice;
 
@@ -41,15 +39,5 @@ public abstract class MixinRendererLivingEntity_GlintColor {
         require = 0)
     private void clientm$tintGlintGlsm(float red, float green, float blue, float alpha) {
         GlintModule.color(red, green, blue, alpha);
-    }
-
-    /** The glint loop on worn armour runs "k < 2"; this is that 2. */
-    @ModifyConstant(
-        method = DO_RENDER,
-        slice = @Slice(from = @At(value = "FIELD", target = GLINT)),
-        constant = @Constant(intValue = 2, ordinal = 0),
-        require = 0)
-    private int clientm$glintLayers(int layers) {
-        return GlintModule.armourLayers();
     }
 }

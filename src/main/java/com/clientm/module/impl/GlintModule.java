@@ -19,7 +19,6 @@ public class GlintModule extends Module {
     private final IntSetting red = add(new IntSetting("red", "Red", 128, 0, 255));
     private final IntSetting green = add(new IntSetting("green", "Green", 64, 0, 255));
     private final IntSetting blue = add(new IntSetting("blue", "Blue", 204, 0, 255));
-    private final BoolSetting single = add(new BoolSetting("single", "Single layer on armour (faster)", false));
     private final IntSetting strength = add(new IntSetting("strength", "Strength %", 100, 10, 200));
 
     public GlintModule() {
@@ -44,12 +43,6 @@ public class GlintModule extends Module {
         if (m == null || m.show.value == shown) return;
         m.show.value = shown;
         if (!shown) m.enabled = true;
-    }
-
-    /** How many times worn armour is drawn again for the glint: vanilla 2, or 1 with the faster option. */
-    public static int armourLayers() {
-        GlintModule m = instance;
-        return m != null && m.enabled && m.single.value ? 1 : 2;
     }
 
     /** True when glint should not be drawn at all. */

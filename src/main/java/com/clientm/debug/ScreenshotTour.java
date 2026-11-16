@@ -249,15 +249,17 @@ public final class ScreenshotTour {
     private void nametagTest() {
         wait = 40;
         Module m = module("texturedbg");
+        Module cache = module("nametagcache");
         switch (step++) {
             case 0:
                 net.minecraft.world.WorldServer world = mc.getIntegratedServer().worldServers[0];
                 world.setWorldTime(6000L);
                 m.setEnabled(false);
+                cache.setEnabled(false);
                 mc.thePlayer.rotationPitch = mc.thePlayer.prevRotationPitch = 0f;
                 net.minecraft.util.Vec3 look = mc.thePlayer.getLookVec();
                 net.minecraft.entity.passive.EntityVillager v = new net.minecraft.entity.passive.EntityVillager(world);
-                v.setCustomNameTag("Nametag Test");
+                v.setCustomNameTag("§cRed §fNametag §aTest");
                 v.setAlwaysRenderNameTag(true);
                 tagX = mc.thePlayer.posX + look.xCoord * 3;
                 tagY = mc.thePlayer.boundingBox.minY - 1;
@@ -268,15 +270,16 @@ public final class ScreenshotTour {
                 break;
             case 1:
                 shot("nametag-1-vanilla");
-                m.setEnabled(true);
+                cache.setEnabled(true);
                 break;
             case 2:
-                shot("nametag-2-textured");
+                shot("nametag-2-cached");
+                m.setEnabled(true);
                 for (com.clientm.setting.Setting s : m.settings)
                     if (s.id.equals("hideNametagBox")) ((com.clientm.setting.BoolSetting) s).value = true;
                 break;
             default:
-                shot("nametag-3-box-hidden");
+                shot("nametag-3-cached-box-hidden");
                 for (com.clientm.setting.Setting s : m.settings)
                     if (s.id.equals("hideNametagBox")) ((com.clientm.setting.BoolSetting) s).value = false;
                 m.setEnabled(false);
