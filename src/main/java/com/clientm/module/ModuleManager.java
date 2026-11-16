@@ -28,6 +28,7 @@ import com.clientm.module.impl.ChunkLoadingModule;
 import com.clientm.module.impl.ClearGlassModule;
 import com.clientm.module.impl.CoordinatesModule;
 import com.clientm.module.impl.CpsModule;
+import com.clientm.module.impl.FastParticlesModule;
 import com.clientm.module.impl.FpsModule;
 import com.clientm.module.impl.FrameSubmitModule;
 import com.clientm.module.impl.GlintModule;
@@ -98,6 +99,7 @@ public class ModuleManager {
         register(new FrameSubmitModule());
         register(new NametagCacheModule());
         register(new LightCacheModule());
+        register(new FastParticlesModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
