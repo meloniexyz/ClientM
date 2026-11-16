@@ -12,7 +12,7 @@ import com.clientm.setting.IntSetting;
  */
 public class ChunkLoadingModule extends Module {
 
-    private final IntSetting renderAhead = add(new IntSetting("renderAhead", "Render-ahead frames", 3, 0, 9));
+    private final IntSetting renderAhead = add(new IntSetting("renderAhead", "Render-ahead frames", 0, 0, 9));
     private final BoolSetting applyDistance = add(new BoolSetting("applyDistance", "Control render distance", false));
     private final IntSetting distance = add(new IntSetting("distance", "Render distance (chunks)", 8, 2, 16));
 

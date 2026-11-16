@@ -17,6 +17,8 @@
     "MixinGui_TexturedRect",
     "MixinRender_NametagBox",
     "MixinRendererLivingEntity_NametagBox",
+    "MixinRender_NametagTile",
+    "MixinGlStreamingRing_BatchSync",
     "MixinRenderBlocks_HideFoliage",
     "MixinTextureAtlasSprite_ClearGlass"
   ],

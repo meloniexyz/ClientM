@@ -29,12 +29,14 @@ import com.clientm.module.impl.ClearGlassModule;
 import com.clientm.module.impl.CoordinatesModule;
 import com.clientm.module.impl.CpsModule;
 import com.clientm.module.impl.FpsModule;
+import com.clientm.module.impl.FrameSubmitModule;
 import com.clientm.module.impl.GlintModule;
 import com.clientm.module.impl.HideFoliageModule;
 import com.clientm.module.impl.HitColourModule;
 import com.clientm.module.impl.HudCachingModule;
 import com.clientm.module.impl.KeystrokesModule;
 import com.clientm.module.impl.LazyChunksModule;
+import com.clientm.module.impl.NametagCacheModule;
 import com.clientm.module.impl.NoFogModule;
 import com.clientm.module.impl.PerformanceModule;
 import com.clientm.module.impl.PotionStatusModule;
@@ -92,6 +94,8 @@ public class ModuleManager {
         register(new TexturedBackgroundsModule());
         register(new ClearGlassModule());
         register(new CentredInventoryModule());
+        register(new FrameSubmitModule());
+        register(new NametagCacheModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
@@ -128,6 +132,11 @@ public class ModuleManager {
     public void onMouse(MouseEvent event) {
         if (event.button < 0) return;
         for (Module m : all) if (m.enabled) m.onMouse(event.button, event.buttonstate);
+    }
+
+    @SubscribeEvent
+    public void onRenderTick(TickEvent.RenderTickEvent event) {
+        if (event.phase == TickEvent.Phase.START) com.clientm.render.NametagCache.frameStart();
     }
 
     @SubscribeEvent
