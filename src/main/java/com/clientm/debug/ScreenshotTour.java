@@ -150,9 +150,46 @@ public final class ScreenshotTour {
             if (secs >= 20f) finishBench(secs);
             return;
         }
+        for (int i = 0; i < fighters.size(); i += 2) fighters.get(i).hurtTime = 5;
+        if (!fighters.isEmpty() && fightShot == 0 && secs > 3f) {
+            fightShot = 1;
+            shot("fight-" + System.getenv("CLIENTM_BENCH_LABEL"));
+        }
         mc.thePlayer.rotationYaw = mc.thePlayer.prevRotationYaw = baseYaw + secs * 18f;
         mc.thePlayer.rotationPitch = mc.thePlayer.prevRotationPitch = 10f;
         if (secs >= 20f) finishBench(secs);
+    }
+
+    private final java.util.List<net.minecraft.client.entity.EntityOtherPlayerMP> fighters = new java.util.ArrayList<>();
+    private int fightShot;
+
+    /**
+     * CLIENTM_TOUR=benchfight: the bench spin with eight players in enchanted diamond armour standing around the
+     * camera, half of them flashing as if hit. They exist on the client only.
+     */
+    private void spawnFighters() {
+        net.minecraft.item.Item[] kit = { net.minecraft.init.Items.diamond_sword,
+            net.minecraft.init.Items.diamond_boots, net.minecraft.init.Items.diamond_leggings,
+            net.minecraft.init.Items.diamond_chestplate, net.minecraft.init.Items.diamond_helmet };
+        for (int i = 0; i < 8; i++) {
+            double angle = i * Math.PI / 4;
+            net.minecraft.client.entity.EntityOtherPlayerMP p = new net.minecraft.client.entity.EntityOtherPlayerMP(
+                mc.theWorld,
+                new com.mojang.authlib.GameProfile(java.util.UUID.randomUUID(), "Fighter" + i));
+            p.setPositionAndRotation(
+                mc.thePlayer.posX + Math.cos(angle) * 4,
+                mc.thePlayer.boundingBox.minY,
+                mc.thePlayer.posZ + Math.sin(angle) * 4,
+                (float) Math.toDegrees(angle) + 90f,
+                0f);
+            for (int slot = 0; slot < kit.length; slot++) {
+                net.minecraft.item.ItemStack stack = new net.minecraft.item.ItemStack(kit[slot]);
+                stack.addEnchantment(net.minecraft.enchantment.Enchantment.unbreaking, 1);
+                p.setCurrentItemOrArmor(slot, stack);
+            }
+            mc.theWorld.addEntityToWorld(-1000 - i, p);
+            fighters.add(p);
+        }
     }
 
     private void finishBench(float secs) {
@@ -385,6 +422,12 @@ public final class ScreenshotTour {
         }
         if ("hit".equals(System.getenv("CLIENTM_TOUR"))) {
             hitTest();
+            return;
+        }
+        if ("benchfight".equals(System.getenv("CLIENTM_TOUR"))) {
+            if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            spawnFighters();
+            benching = true;
             return;
         }
         if ("bench".equals(System.getenv("CLIENTM_TOUR")) || FLY) {
