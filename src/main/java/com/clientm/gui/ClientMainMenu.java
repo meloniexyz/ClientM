@@ -23,7 +23,6 @@ public class ClientMainMenu extends GuiScreen {
 
     private static final int LINE = 0xFF22222C;
     private static final int PANEL = 0xFF0B0B0F;
-    private static final int HOVER = 0x18FFFFFF;
     private static final int TEXT = 0xEDEDF2;
     private static final int TEXT_2 = 0xA3A3B2;
     private static final int TEXT_3 = 0x6C6C7C;
@@ -96,16 +95,16 @@ public class ClientMainMenu extends GuiScreen {
         int hover = buttonAt(mouseX, mouseY);
         for (int i = 0; i < LABELS.length; i++) {
             int y = buttonY(i);
-            boolean primary = i == 0;
-            if (primary) {
+            // Every button is dark until the pointer is on it; then it fills with the accent colour.
+            boolean lit = i == hover;
+            if (lit) {
                 round(x, y, BTN_W, BTN_H, ACCENT);
             } else {
                 round(x, y, BTN_W, BTN_H, LINE);
                 round(x + 1, y + 1, BTN_W - 2, BTN_H - 2, PANEL);
             }
-            if (i == hover) round(x, y, BTN_W, BTN_H, HOVER);
-            SmoothFont f = primary ? bold : font;
-            f.draw(LABELS[i], x + (BTN_W - f.width(LABELS[i])) / 2, y + 8, primary ? INK : i == hover ? TEXT : TEXT_2);
+            SmoothFont f = lit ? bold : font;
+            f.draw(LABELS[i], x + (BTN_W - f.width(LABELS[i])) / 2, y + 8, lit ? INK : TEXT_2);
         }
 
         // The running version, bottom left: name in light grey, number in the accent colour so it stands out.

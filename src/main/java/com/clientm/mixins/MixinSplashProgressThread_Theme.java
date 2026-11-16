@@ -12,6 +12,7 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -34,6 +35,12 @@ public abstract class MixinSplashProgressThread_Theme {
         require = 0)
     private int clientm$picturesInOwnColours(int colour) {
         return 0xFFFFFF;
+    }
+
+    /** Angelica's memory bar fills in green, then yellow; on the ClientM screen it uses the accent colour. */
+    @ModifyVariable(method = "setColor", at = @At("HEAD"), argsOnly = true, require = 0)
+    private int clientm$memoryBarInAccent(int colour) {
+        return colour == 0x78CB34 || colour == 0xE6E84A ? 0xFF4D5E : colour;
     }
 
     @Inject(method = "run", at = @At(value = "INVOKE", target = "Lorg/lwjgl/opengl/Display;update()V"), require = 0)

@@ -54,21 +54,59 @@ public class ClearGlassModule extends Module {
         ClearGlassModule m = instance;
         if (m == null || !m.enabled || name == null || images == null || images.length == 0 || images[0] == null)
             return;
-        if (name.startsWith("minecraft:")) name = name.substring(10);
-        if (!name.equals("glass") && !(m.stained.value && name.startsWith("glass_") && !name.contains("pane"))) return;
+        if (!wanted(name.toLowerCase(java.util.Locale.ROOT), m.stained.value)) return;
         BufferedImage src = images[0];
         int w = src.getWidth();
         int h = src.getHeight();
         int edge = m.frame.value ? Math.max(1, w / 16) : 0;
         BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        for (int y = 0; y < h; y++) {
-            // Animated textures stack square frames vertically; treat each frame on its own.
-            int fy = y % w;
-            for (int x = 0; x < w; x++) {
-                boolean onFrame = x < edge || fy < edge || x >= w - edge || fy >= w - edge;
-                out.setRGB(x, y, onFrame ? src.getRGB(x, y) : src.getRGB(x, y) & 0x00FFFFFF);
+        // Animated textures stack square frames vertically; treat each frame on its own.
+        for (int top = 0; top + w <= h; top += w) {
+            // A connected-glass piece only has a frame on the sides where the glass ends, so each side and each
+            // corner is kept only when the picture really has a solid line there.
+            boolean left = edge > 0 && solid(src, 0, top, 0, 1, w);
+            boolean right = edge > 0 && solid(src, w - 1, top, 0, 1, w);
+            boolean up = edge > 0 && solid(src, 0, top, 1, 0, w);
+            boolean down = edge > 0 && solid(src, 0, top + w - 1, 1, 0, w);
+            for (int fy = 0; fy < w; fy++) {
+                for (int x = 0; x < w; x++) {
+                    boolean nearLeft = x < edge, nearRight = x >= w - edge, nearUp = fy < edge,
+                        nearDown = fy >= w - edge;
+                    boolean keep = nearLeft && left || nearRight && right || nearUp && up || nearDown && down;
+                    if (!keep && edge > 0 && (nearLeft || nearRight) && (nearUp || nearDown)) {
+                        // An inner corner: just the corner block, when its outermost pixel is solid.
+                        keep = opaque(src.getRGB(nearLeft ? 0 : w - 1, top + (nearUp ? 0 : w - 1)));
+                    }
+                    int rgb = src.getRGB(x, top + fy);
+                    out.setRGB(x, top + fy, keep ? rgb : rgb & 0x00FFFFFF);
+                }
             }
         }
         images[0] = out;
+    }
+
+    /**
+     * Plain glass is "glass"; stained glass is "glass_red" and so on. Packs with connected glass add one picture per
+     * piece under a "ctm" folder, for example "mcpatcher/ctm/glass/12". Panes are left alone.
+     */
+    private static boolean wanted(String name, boolean stainedToo) {
+        if (name.startsWith("minecraft:")) name = name.substring(10);
+        if (name.contains("pane")) return false;
+        boolean connected = name.contains("ctm/") && name.contains("glass");
+        boolean coloured = name.startsWith("glass_")
+            || connected && (name.contains("glass_") || name.contains("stained"));
+        boolean plain = name.equals("glass") || connected && !coloured;
+        return plain || coloured && stainedToo;
+    }
+
+    /** True when most of one outermost line of a frame is filled in. */
+    private static boolean solid(BufferedImage image, int x, int y, int stepX, int stepY, int length) {
+        int filled = 0;
+        for (int i = 0; i < length; i++) if (opaque(image.getRGB(x + i * stepX, y + i * stepY))) filled++;
+        return filled * 10 >= length * 6;
+    }
+
+    private static boolean opaque(int argb) {
+        return (argb >>> 24) >= 96;
     }
 }

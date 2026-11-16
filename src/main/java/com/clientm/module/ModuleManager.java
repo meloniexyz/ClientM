@@ -23,6 +23,7 @@ import com.clientm.ClientM;
 import com.clientm.compat.PerformancePreset;
 import com.clientm.gui.ClientScreen;
 import com.clientm.module.impl.ArmourStatusModule;
+import com.clientm.module.impl.BorderlessFullscreenModule;
 import com.clientm.module.impl.CentredInventoryModule;
 import com.clientm.module.impl.ChunkLoadingModule;
 import com.clientm.module.impl.ClearGlassModule;
@@ -100,6 +101,7 @@ public class ModuleManager {
         register(new NametagCacheModule());
         register(new LightCacheModule());
         register(new FastParticlesModule());
+        register(new BorderlessFullscreenModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
