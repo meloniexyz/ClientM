@@ -150,7 +150,37 @@ public final class ScreenshotTour {
             if (secs >= 20f) finishBench(secs);
             return;
         }
-        for (int i = 0; i < fighters.size(); i += 2) fighters.get(i).hurtTime = 5;
+        // Four exchanges a second: the camera player swings and is hit, the fighters swing, half of them are hit.
+        if (!fighters.isEmpty() && (int) (secs * 4f) != fightBeat) {
+            fightBeat = (int) (secs * 4f);
+            mc.thePlayer.inventory.mainInventory[mc.thePlayer.inventory.currentItem] = new net.minecraft.item.ItemStack(
+                net.minecraft.init.Items.diamond_sword);
+            mc.thePlayer.swingItem();
+            if ((fightBeat & 1) == 0) {
+                mc.thePlayer.hurtTime = mc.thePlayer.maxHurtTime = 10;
+                mc.thePlayer.attackedAtYaw = 0f;
+                mc.theWorld.playSound(
+                    mc.thePlayer.posX,
+                    mc.thePlayer.posY,
+                    mc.thePlayer.posZ,
+                    "game.player.hurt",
+                    1f,
+                    1f,
+                    false);
+            }
+            for (int i = 0; i < fighters.size(); i++) {
+                net.minecraft.client.entity.EntityOtherPlayerMP f = fighters.get(i);
+                f.swingItem();
+                if ((i + fightBeat) % 2 == 0) {
+                    f.hurtTime = f.maxHurtTime = 10;
+                    // What a critical hit with a Sharpness sword throws off.
+                    mc.effectRenderer.addEffect(new net.minecraft.client.particle.EntityCrit2FX(mc.theWorld, f));
+                    mc.effectRenderer
+                        .addEffect(new net.minecraft.client.particle.EntityCrit2FX(mc.theWorld, f, "magicCrit"));
+                    mc.theWorld.playSound(f.posX, f.posY, f.posZ, "game.player.hurt", 1f, 1f, false);
+                }
+            }
+        }
         if (!fighters.isEmpty() && fightShot == 0 && secs > 3f) {
             fightShot = 1;
             shot("fight-" + System.getenv("CLIENTM_BENCH_LABEL"));
@@ -162,6 +192,7 @@ public final class ScreenshotTour {
 
     private final java.util.List<net.minecraft.client.entity.EntityOtherPlayerMP> fighters = new java.util.ArrayList<>();
     private int fightShot;
+    private int fightBeat = -1;
 
     /**
      * CLIENTM_TOUR=benchfight: the bench spin with eight players in enchanted diamond armour standing around the
@@ -426,6 +457,7 @@ public final class ScreenshotTour {
         }
         if ("benchfight".equals(System.getenv("CLIENTM_TOUR"))) {
             if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            mc.gameSettings.particleSetting = 0; // All
             spawnFighters();
             benching = true;
             return;
