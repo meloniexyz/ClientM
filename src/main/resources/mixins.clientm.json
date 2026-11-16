@@ -18,6 +18,7 @@
     "MixinRender_NametagBox",
     "MixinRendererLivingEntity_NametagBox",
     "MixinRender_NametagTile",
+    "MixinEntity_LightCache",
     "MixinGlStreamingRing_BatchSync",
     "MixinRenderBlocks_HideFoliage",
     "MixinTextureAtlasSprite_ClearGlass"

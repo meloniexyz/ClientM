@@ -36,6 +36,7 @@ import com.clientm.module.impl.HitColourModule;
 import com.clientm.module.impl.HudCachingModule;
 import com.clientm.module.impl.KeystrokesModule;
 import com.clientm.module.impl.LazyChunksModule;
+import com.clientm.module.impl.LightCacheModule;
 import com.clientm.module.impl.NametagCacheModule;
 import com.clientm.module.impl.NoFogModule;
 import com.clientm.module.impl.PerformanceModule;
@@ -96,6 +97,7 @@ public class ModuleManager {
         register(new CentredInventoryModule());
         register(new FrameSubmitModule());
         register(new NametagCacheModule());
+        register(new LightCacheModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()

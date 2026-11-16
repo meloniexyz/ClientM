@@ -98,7 +98,7 @@ public final class ScreenshotTour {
         wait = 50;
         int n = step++;
         if (n == 0) {
-            if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            noonAndClear();
             for (HudModule h : ClientM.modules.hud()) h.setEnabled(true);
         }
         if (n >= 1 && n <= 4)
@@ -239,6 +239,69 @@ public final class ScreenshotTour {
         }
     }
 
+    /**
+     * CLIENTM_FIGHT_MOBS=n: n real zombie pigmen on the built-in server around the camera, so the client also has
+     * entity packets, sounds and per-entity mod hooks to deal with, as on a busy server.
+     */
+    private void spawnMobs() {
+        int count;
+        try {
+            count = Integer.parseInt(System.getenv("CLIENTM_FIGHT_MOBS"));
+        } catch (Exception e) {
+            return;
+        }
+        if (mc.getIntegratedServer() == null || count <= 0) return;
+        cpw.mods.fml.common.FMLCommonHandler.instance()
+            .bus()
+            .register(new MobSpawner(count, mc.thePlayer.posX, mc.thePlayer.posY, mc.thePlayer.posZ));
+    }
+
+    /** Runs once on the server thread, where spawning is safe. */
+    public static final class MobSpawner {
+
+        private final int count;
+        private final double x, y, z;
+        private boolean done;
+
+        MobSpawner(int count, double x, double y, double z) {
+            this.count = count;
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        @cpw.mods.fml.common.eventhandler.SubscribeEvent
+        public void onServerTick(cpw.mods.fml.common.gameevent.TickEvent.ServerTickEvent event) {
+            if (done) return;
+            done = true;
+            net.minecraft.world.World world = net.minecraft.server.MinecraftServer.getServer().worldServers[0];
+            for (int i = 0; i < count; i++) {
+                double angle = i * 2.399963; // golden angle: an even spiral
+                double radius = 3 + Math.sqrt(i) * 1.5;
+                net.minecraft.entity.monster.EntityPigZombie mob = new net.minecraft.entity.monster.EntityPigZombie(
+                    world);
+                mob.setLocationAndAngles(x + Math.cos(angle) * radius, y, z + Math.sin(angle) * radius, 0f, 0f);
+                mob.setCurrentItemOrArmor(0, new net.minecraft.item.ItemStack(net.minecraft.init.Items.golden_sword));
+                world.spawnEntityInWorld(mob);
+            }
+        }
+    }
+
+    /** Benchmarks must not depend on the weather the world happens to have: rain alone costs hundreds of FPS. */
+    private void noonAndClear() {
+        if (mc.getIntegratedServer() == null) return;
+        net.minecraft.world.WorldServer world = mc.getIntegratedServer().worldServers[0];
+        world.setWorldTime(6000L);
+        world.getWorldInfo()
+            .setRaining(false);
+        world.getWorldInfo()
+            .setThundering(false);
+        world.getWorldInfo()
+            .setRainTime(1000000);
+        world.getWorldInfo()
+            .setThunderTime(1000000);
+    }
+
     private void finishBench(float secs) {
         benching = false;
         int[] sorted = java.util.Arrays.copyOf(frameNanos, frames);
@@ -278,7 +341,7 @@ public final class ScreenshotTour {
     private void hitTest() {
         wait = 40;
         if (step++ == 0) {
-            if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            noonAndClear();
             Module m = module("hitcolour");
             for (com.clientm.setting.Setting s : m.settings) {
                 if (s instanceof com.clientm.setting.IntSetting) ((com.clientm.setting.IntSetting) s)
@@ -301,7 +364,7 @@ public final class ScreenshotTour {
         wait = 120;
         switch (step++) {
             case 0:
-                if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+                noonAndClear();
                 PerformancePreset.LOW.apply();
                 break;
             case 1:
@@ -472,14 +535,15 @@ public final class ScreenshotTour {
             return;
         }
         if ("benchfight".equals(System.getenv("CLIENTM_TOUR"))) {
-            if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            noonAndClear();
             mc.gameSettings.particleSetting = 0; // All
             spawnFighters();
+            spawnMobs();
             benching = true;
             return;
         }
         if ("bench".equals(System.getenv("CLIENTM_TOUR")) || FLY) {
-            if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+            noonAndClear();
             if (FLY && mc.getIntegratedServer() != null) {
                 // Let the server-side player fly, or the server would pull the client back down.
                 for (Object o : mc.getIntegratedServer()
@@ -508,7 +572,7 @@ public final class ScreenshotTour {
         switch (step++) {
             case 0:
                 // Daylight, a mid preset and every HUD module on, so the pictures show something.
-                if (mc.getIntegratedServer() != null) mc.getIntegratedServer().worldServers[0].setWorldTime(6000L);
+                noonAndClear();
                 PerformancePreset.BALANCED.apply();
                 for (HudModule h : ClientM.modules.hud()) h.setEnabled(true);
                 wait = 160;
