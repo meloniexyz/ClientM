@@ -108,7 +108,9 @@ public class ClientMainMenu extends GuiScreen {
             f.draw(LABELS[i], x + (BTN_W - f.width(LABELS[i])) / 2, y + 8, primary ? INK : i == hover ? TEXT : TEXT_2);
         }
 
-        font.draw("ClientM " + Tags.VERSION, 6, height - 12, TEXT_3);
+        // The running version, bottom left: name in light grey, number in the accent colour so it stands out.
+        font.draw("ClientM ", 6, height - 12, TEXT_2);
+        font.draw(Tags.VERSION, 6 + font.width("ClientM "), height - 12, 0xFF4D5E);
         font.draw(COPYRIGHT, width - 6 - font.width(COPYRIGHT), height - 12, TEXT_3);
     }
 
