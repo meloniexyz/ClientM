@@ -16,11 +16,13 @@ import com.clientm.module.Module;
 public class BorderlessFullscreenModule extends Module {
 
     /** What lwjgl3ify was last told; null until the first tick. */
+    private static BorderlessFullscreenModule instance;
     private Boolean applied;
     private boolean broken;
 
     public BorderlessFullscreenModule() {
         super("borderless", "Borderless Fullscreen", Category.VISUAL, false);
+        instance = this;
     }
 
     @Override
@@ -28,15 +30,13 @@ public class BorderlessFullscreenModule extends Module {
         return "Fullscreen as a borderless window; off for normal fullscreen";
     }
 
-    @Override
-    public void onTick() {
-        // Also called while the settings screen is open with the module off.
-        apply(enabled);
-    }
-
-    @Override
-    public void onDisable() {
-        apply(false);
+    /**
+     * Called every game tick whether the module is on or off, so that "off" is also carried through at startup and
+     * right after the switch is flipped.
+     */
+    public static void sync() {
+        BorderlessFullscreenModule m = instance;
+        if (m != null) m.apply(m.enabled);
     }
 
     private void apply(boolean borderless) {

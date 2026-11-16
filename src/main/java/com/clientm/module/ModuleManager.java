@@ -162,6 +162,7 @@ public class ModuleManager {
             for (Module m : all) if (m.enabled) m.onSettingsChanged();
         }
         for (Module m : all) if (m.enabled || editing) m.onTick();
+        BorderlessFullscreenModule.sync();
     }
 
     @SubscribeEvent

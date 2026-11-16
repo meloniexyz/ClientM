@@ -16,7 +16,7 @@ public class ClearGlassModule extends Module {
 
     private static ClearGlassModule instance;
 
-    private final BoolSetting stained = add(new BoolSetting("stained", "Stained glass too", false));
+    private final BoolSetting stained = add(new BoolSetting("stained", "Tinted glass too", false));
     private final BoolSetting frame = add(new BoolSetting("frame", "Keep the frame", true));
 
     public ClearGlassModule() {
