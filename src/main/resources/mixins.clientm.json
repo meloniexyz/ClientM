@@ -22,6 +22,7 @@
     "MixinEntity_LightCache",
     "MixinSplashProgress_Theme",
     "MixinSplashProgressThread_Theme",
+    "MixinSplashFontRenderer_Theme",
     "MixinWorld_ParticleCollision",
     "MixinGlStreamingRing_BatchSync",
     "MixinRenderBlocks_HideFoliage",
