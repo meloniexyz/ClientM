@@ -36,7 +36,6 @@ import com.clientm.module.impl.HitColourModule;
 import com.clientm.module.impl.HudCachingModule;
 import com.clientm.module.impl.KeystrokesModule;
 import com.clientm.module.impl.LazyChunksModule;
-import com.clientm.module.impl.ModelBatchModule;
 import com.clientm.module.impl.NametagCacheModule;
 import com.clientm.module.impl.NoFogModule;
 import com.clientm.module.impl.PerformanceModule;
@@ -97,7 +96,6 @@ public class ModuleManager {
         register(new CentredInventoryModule());
         register(new FrameSubmitModule());
         register(new NametagCacheModule());
-        register(new ModelBatchModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
@@ -139,7 +137,6 @@ public class ModuleManager {
     @SubscribeEvent
     public void onRenderTick(TickEvent.RenderTickEvent event) {
         if (event.phase != TickEvent.Phase.START) return;
-        com.clientm.render.ModelBatch.frameStart();
         com.clientm.render.NametagCache.frameStart();
     }
 

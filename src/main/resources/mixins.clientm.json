@@ -19,10 +19,6 @@
     "MixinRendererLivingEntity_NametagBox",
     "MixinRender_NametagTile",
     "MixinGlStreamingRing_BatchSync",
-    "AccessorModelBox",
-    "AccessorTexturedQuad",
-    "MixinModelRenderer_Batch",
-    "MixinModelBiped_Batch",
     "MixinRenderBlocks_HideFoliage",
     "MixinTextureAtlasSprite_ClearGlass"
   ],
