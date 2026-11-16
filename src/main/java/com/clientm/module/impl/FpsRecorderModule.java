@@ -23,8 +23,15 @@ public class FpsRecorderModule extends Module {
     private static FpsRecorderModule instance;
 
     private final SimpleDateFormat clock = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    private final java.util.concurrent.ExecutorService disk = java.util.concurrent.Executors
+        .newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "ClientM FPS Recorder");
+            t.setDaemon(true);
+            return t;
+        });
+    /** Only touched on the recorder's own thread. */
     private BufferedWriter out;
-    private boolean broken;
+    private volatile boolean broken;
     private long last;
     private long secondStart;
     private float[] frames = new float[8192];
@@ -79,16 +86,6 @@ public class FpsRecorderModule extends Module {
 
     private void write(float seconds) {
         try {
-            if (out == null) {
-                File file = new File(mc.mcDataDir, "clientm-fps-log.csv");
-                boolean fresh = !file.isFile() || file.length() == 0;
-                out = new BufferedWriter(new FileWriter(file, true));
-                if (fresh) {
-                    out.write(
-                        "time,fps,low1_fps,worst_ms,over_5ms,entities,players,particles,hit,swinging,server,version");
-                    out.newLine();
-                }
-            }
             Arrays.sort(frames, 0, count);
             float worst = frames[count - 1];
             // The slowest hundredth of this second's frames, as a frame rate.
@@ -99,45 +96,66 @@ public class FpsRecorderModule extends Module {
             for (int i = count - 1; i >= 0 && frames[i] > 5F; i--) over++;
             int players = 0;
             for (Object o : mc.theWorld.playerEntities) if (o instanceof EntityPlayer && o != mc.thePlayer) players++;
-            String particles = mc.effectRenderer.getStatistics();
             String server = mc.func_147104_D() != null ? mc.func_147104_D().serverIP : "singleplayer";
-            out.write(
-                clock.format(new Date()) + ","
-                    + Math.round(count / seconds)
-                    + ","
-                    + Math.round(1000F * slow / sum)
-                    + ","
-                    + String.format(java.util.Locale.ROOT, "%.1f", worst)
-                    + ","
-                    + over
-                    + ","
-                    + mc.theWorld.loadedEntityList.size()
-                    + ","
-                    + players
-                    + ","
-                    + particles
-                    + ","
-                    + (hit ? 1 : 0)
-                    + ","
-                    + (swung ? 1 : 0)
-                    + ","
-                    + server
-                    + ","
-                    + com.clientm.Tags.VERSION);
-            out.newLine();
-            out.flush();
+            final String line = clock.format(new Date()) + ","
+                + Math.round(count / seconds)
+                + ","
+                + Math.round(1000F * slow / sum)
+                + ","
+                + String.format(java.util.Locale.ROOT, "%.1f", worst)
+                + ","
+                + over
+                + ","
+                + mc.theWorld.loadedEntityList.size()
+                + ","
+                + players
+                + ","
+                + mc.effectRenderer.getStatistics()
+                + ","
+                + (hit ? 1 : 0)
+                + ","
+                + (swung ? 1 : 0)
+                + ","
+                + server
+                + ","
+                + com.clientm.Tags.VERSION;
+            final File file = new File(mc.mcDataDir, "clientm-fps-log.csv");
+            // The disk is never touched on the game thread: a slow disk would freeze the picture.
+            disk.execute(() -> save(file, line));
         } catch (Throwable t) {
             broken = true;
             ClientM.LOG.info("FPS Recorder stopped ({})", t.toString());
         }
     }
 
-    private void close() {
+    /** Runs on the recorder's own thread. */
+    private void save(File file, String line) {
         try {
-            if (out != null) out.close();
-        } catch (Throwable ignored) {}
-        out = null;
+            if (out == null) {
+                boolean fresh = !file.isFile() || file.length() == 0;
+                out = new BufferedWriter(new FileWriter(file, true));
+                if (fresh) {
+                    out.write(
+                        "time,fps,low1_fps,worst_ms,over_5ms,entities,players,particles,hit,swinging,server,version");
+                    out.newLine();
+                }
+            }
+            out.write(line);
+            out.newLine();
+            out.flush();
+        } catch (Throwable t) {
+            broken = true;
+        }
+    }
+
+    private void close() {
         last = 0;
         count = 0;
+        disk.execute(() -> {
+            try {
+                if (out != null) out.close();
+            } catch (Throwable ignored) {}
+            out = null;
+        });
     }
 }
