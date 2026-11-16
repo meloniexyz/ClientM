@@ -155,11 +155,16 @@ public final class ScreenshotTour {
             fightBeat = (int) (secs * 4f);
             mc.thePlayer.inventory.mainInventory[mc.thePlayer.inventory.currentItem] = new net.minecraft.item.ItemStack(
                 net.minecraft.init.Items.diamond_sword);
-            mc.thePlayer.swingItem();
-            if ((fightBeat & 1) == 0) {
+            // CLIENTM_FIGHT_OFF switches parts of the fight off to see what each one costs:
+            // w swings, h hits on the camera player, e hits on fighters, p particles, s sounds.
+            String off = System.getenv("CLIENTM_FIGHT_OFF");
+            if (off == null) off = "";
+            boolean swings = off.indexOf('w') < 0, sounds = off.indexOf('s') < 0;
+            if (swings) mc.thePlayer.swingItem();
+            if ((fightBeat & 1) == 0 && off.indexOf('h') < 0) {
                 mc.thePlayer.hurtTime = mc.thePlayer.maxHurtTime = 10;
                 mc.thePlayer.attackedAtYaw = 0f;
-                mc.theWorld.playSound(
+                if (sounds) mc.theWorld.playSound(
                     mc.thePlayer.posX,
                     mc.thePlayer.posY,
                     mc.thePlayer.posZ,
@@ -170,15 +175,16 @@ public final class ScreenshotTour {
             }
             for (int i = 0; i < fighters.size(); i++) {
                 net.minecraft.client.entity.EntityOtherPlayerMP f = fighters.get(i);
-                f.swingItem();
-                if ((i + fightBeat) % 2 == 0) {
-                    f.hurtTime = f.maxHurtTime = 10;
+                if (swings) f.swingItem();
+                if ((i + fightBeat) % 2 != 0) continue;
+                if (off.indexOf('e') < 0) f.hurtTime = f.maxHurtTime = 10;
+                if (off.indexOf('p') < 0) {
                     // What a critical hit with a Sharpness sword throws off.
                     mc.effectRenderer.addEffect(new net.minecraft.client.particle.EntityCrit2FX(mc.theWorld, f));
                     mc.effectRenderer
                         .addEffect(new net.minecraft.client.particle.EntityCrit2FX(mc.theWorld, f, "magicCrit"));
-                    mc.theWorld.playSound(f.posX, f.posY, f.posZ, "game.player.hurt", 1f, 1f, false);
                 }
+                if (sounds) mc.theWorld.playSound(f.posX, f.posY, f.posZ, "game.player.hurt", 1f, 1f, false);
             }
         }
         if (!fighters.isEmpty() && fightShot == 0 && secs > 3f) {
@@ -202,20 +208,30 @@ public final class ScreenshotTour {
         net.minecraft.item.Item[] kit = { net.minecraft.init.Items.diamond_sword,
             net.minecraft.init.Items.diamond_boots, net.minecraft.init.Items.diamond_leggings,
             net.minecraft.init.Items.diamond_chestplate, net.minecraft.init.Items.diamond_helmet };
-        for (int i = 0; i < 8; i++) {
-            double angle = i * Math.PI / 4;
+        // CLIENTM_FIGHT_COUNT sets how many fighters; CLIENTM_FIGHT_KIT strips parts of them to see what each costs:
+        // a no armour, i no held sword, g no enchant glint.
+        String kitOff = System.getenv("CLIENTM_FIGHT_KIT");
+        if (kitOff == null) kitOff = "";
+        int count = 8;
+        try {
+            count = Integer.parseInt(System.getenv("CLIENTM_FIGHT_COUNT"));
+        } catch (Exception ignored) {}
+        for (int i = 0; i < count; i++) {
+            double angle = i * Math.PI / 4 + (i / 8) * 0.39;
+            double radius = 4 + (i / 8) * 2;
             net.minecraft.client.entity.EntityOtherPlayerMP p = new net.minecraft.client.entity.EntityOtherPlayerMP(
                 mc.theWorld,
                 new com.mojang.authlib.GameProfile(java.util.UUID.randomUUID(), "Fighter" + i));
             p.setPositionAndRotation(
-                mc.thePlayer.posX + Math.cos(angle) * 4,
+                mc.thePlayer.posX + Math.cos(angle) * radius,
                 mc.thePlayer.boundingBox.minY,
-                mc.thePlayer.posZ + Math.sin(angle) * 4,
+                mc.thePlayer.posZ + Math.sin(angle) * radius,
                 (float) Math.toDegrees(angle) + 90f,
                 0f);
             for (int slot = 0; slot < kit.length; slot++) {
+                if (kitOff.indexOf(slot == 0 ? 'i' : 'a') >= 0) continue;
                 net.minecraft.item.ItemStack stack = new net.minecraft.item.ItemStack(kit[slot]);
-                stack.addEnchantment(net.minecraft.enchantment.Enchantment.unbreaking, 1);
+                if (kitOff.indexOf('g') < 0) stack.addEnchantment(net.minecraft.enchantment.Enchantment.unbreaking, 1);
                 p.setCurrentItemOrArmor(slot, stack);
             }
             mc.theWorld.addEntityToWorld(-1000 - i, p);
