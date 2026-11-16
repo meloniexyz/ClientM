@@ -2,7 +2,6 @@ package com.clientm.render;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 
 import net.minecraft.client.Minecraft;
@@ -24,42 +23,59 @@ import com.clientm.module.impl.NametagCacheModule;
 import com.clientm.module.impl.TexturedBackgroundsModule;
 
 /**
- * Draws a nametag from a small image made once per name, instead of laying the text out twice every frame.
+ * Draws nametags from one shared image instead of laying the text out twice per name every frame.
  *
- * The image holds the name in white-on-transparent plus a solid white strip. One draw puts down the dark box (sampling
- * the white strip) and the faint see-through-walls text, a second draw puts down the bright text. Vanilla needs three
- * draws and two text layouts for the same picture.
+ * Every name is written once, in white on transparent, into a sheet that also holds a solid white patch. While the
+ * world's entities are being drawn, each nametag only adds its corners to a list. When the entities are done, the
+ * whole list goes to the graphics card in two draws: one for the dark boxes and the faint see-through-walls text, one
+ * for the bright text. Vanilla needs three draws and two text layouts per name.
  *
- * A name seen for the first time is drawn the vanilla way for one frame and its image is made at the start of the
- * next frame, when no world rendering is in progress.
+ * A name seen for the first time is drawn the vanilla way for one frame and written into the sheet at the start of
+ * the next frame, when no world rendering is in progress.
  */
 public final class NametagCache implements IResourceManagerReloadListener {
 
-    /** Image pixels per font pixel; enough for 32px HD fonts. */
+    /** Sheet pixels per font pixel; enough for 32px HD fonts. */
     private static final int SCALE = 4;
-    private static final int MAX_TILES = 256;
+    /** Sheet size in font pixels (2048 real pixels). */
+    private static final int SHEET = 512;
+    /** A line of names: 10 high plus a gap. */
+    private static final int ROW = 11;
+    private static final int WHITE = 4;
     private static final int MAX_BAKES_PER_FRAME = 8;
     private static final int MAX_WIDTH = 480;
+    /** Numbers kept per queued rectangle: 4 corners of x y z u v, then r g b a and the light value. */
+    private static final int QUAD = 25;
+    private static final float RADIANS = (float) (Math.PI / 180.0);
 
     private static final Map<String, Tile> TILES = new HashMap<>();
     private static final ArrayList<String> PENDING = new ArrayList<>();
-    private static long frame;
+    private static Framebuffer sheet;
+    private static int cursorX;
+    private static int cursorY;
     private static boolean listening;
     private static boolean broken;
     private static boolean logged;
 
+    /** True between the start and the end of the world's entity drawing. */
+    private static boolean collecting;
+    private static float[] behind = new float[QUAD * 64];
+    private static int behindSize;
+    private static float[] front = new float[QUAD * 32];
+    private static int frontSize;
+
     private static final class Tile {
 
-        Framebuffer image;
         int textWidth;
-        float textU;
-        float whiteU;
-        long lastUsed;
+        float u0;
+        float u1;
+        float vTop;
+        float vBottom;
     }
 
     private NametagCache() {}
 
-    /** Draws the nametag from its image. False means the caller should draw it the vanilla way. */
+    /** Draws or queues the nametag. False means the caller should draw it the vanilla way. */
     public static boolean draw(RenderManager manager, Entity entity, String name, double x, double y, double z,
         int maxDistance) {
         if (broken || !NametagCacheModule.active() || manager == null || manager.livingPlayer == null) return false;
@@ -70,71 +86,214 @@ public final class NametagCache implements IResourceManagerReloadListener {
             if (name.indexOf("§k") < 0 && PENDING.size() < 64 && !PENDING.contains(name)) PENDING.add(name);
             return false;
         }
-        tile.lastUsed = frame;
 
+        // The same placement vanilla builds with translate, two rotations and a scale, worked out here so the
+        // corners can wait in a list.
         float scale = 0.016666668F * 1.6F;
-        GL11.glPushMatrix();
-        GL11.glTranslatef((float) x, (float) y + entity.height + 0.5F, (float) z);
-        GL11.glNormal3f(0.0F, 1.0F, 0.0F);
-        GL11.glRotatef(-manager.playerViewY, 0.0F, 1.0F, 0.0F);
-        GL11.glRotatef(manager.playerViewX, 1.0F, 0.0F, 0.0F);
-        GL11.glScalef(-scale, -scale, scale);
-        GL11.glDisable(GL11.GL_LIGHTING);
-        GL11.glDepthMask(false);
-        GL11.glDisable(GL11.GL_DEPTH_TEST);
-        GL11.glEnable(GL11.GL_BLEND);
-        // The image is stored with colour already multiplied by alpha.
-        OpenGlHelper.glBlendFunc(GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA);
-        GL11.glEnable(GL11.GL_TEXTURE_2D);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, tile.image.framebufferTexture);
+        float yaw = -manager.playerViewY * RADIANS;
+        float pitch = manager.playerViewX * RADIANS;
+        float cosYaw = (float) Math.cos(yaw);
+        float sinYaw = (float) Math.sin(yaw);
+        float cosPitch = (float) Math.cos(pitch);
+        float sinPitch = (float) Math.sin(pitch);
+        float cx = (float) x;
+        float cy = (float) y + entity.height + 0.5F;
+        float cz = (float) z;
+        // One step right and one step down on the tag, in world directions.
+        float rightX = -scale * cosYaw;
+        float rightZ = scale * sinYaw;
+        float downX = -scale * sinPitch * sinYaw;
+        float downY = -scale * cosPitch;
+        float downZ = -scale * sinPitch * cosYaw;
 
         int offset = name.equals("deadmau5") ? -10 : 0;
         int half = tile.textWidth / 2;
-        // Text area of the image: one pixel of margin around the text, like the vanilla box.
-        double left = -half - 1;
-        double right = left + tile.textWidth + 2;
-        double top = offset - 1;
-        double bottom = offset + 9;
+        float light = (float) (((int) OpenGlHelper.lastBrightnessY << 16)
+            | ((int) OpenGlHelper.lastBrightnessX & 0xFFFF));
+        float whiteU = (WHITE / 2F) / SHEET;
+        float whiteV = 1F - (WHITE / 2F) / SHEET;
 
-        Tessellator t = Tessellator.instance;
-        t.startDrawingQuads();
         if (!TexturedBackgroundsModule.skipNametagBox()) {
-            t.setColorRGBA_F(0.0F, 0.0F, 0.0F, 0.25F);
-            t.addVertexWithUV(-half - 1, offset - 1, 0.0D, tile.whiteU, 0.5D);
-            t.addVertexWithUV(-half - 1, offset + 8, 0.0D, tile.whiteU, 0.5D);
-            t.addVertexWithUV(half + 1, offset + 8, 0.0D, tile.whiteU, 0.5D);
-            t.addVertexWithUV(half + 1, offset - 1, 0.0D, tile.whiteU, 0.5D);
+            behind = room(behind, behindSize);
+            behindSize = quad(
+                behind,
+                behindSize,
+                cx,
+                cy,
+                cz,
+                rightX,
+                rightZ,
+                downX,
+                downY,
+                downZ,
+                -half - 1,
+                offset - 1,
+                half + 1,
+                offset + 8,
+                whiteU,
+                whiteU,
+                whiteV,
+                whiteV,
+                0F,
+                0F,
+                0F,
+                0.25F,
+                light);
         }
-        t.setColorRGBA_F(0.125F, 0.125F, 0.125F, 0.125F);
-        quad(t, left, top, right, bottom, tile.textU);
-        t.draw();
-
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthMask(true);
-        t.startDrawingQuads();
-        t.setColorRGBA_F(1.0F, 1.0F, 1.0F, 1.0F);
-        quad(t, left, top, right, bottom, tile.textU);
-        t.draw();
-
-        OpenGlHelper.glBlendFunc(770, 771, 1, 0);
-        GL11.glEnable(GL11.GL_LIGHTING);
-        GL11.glDisable(GL11.GL_BLEND);
-        GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
-        GL11.glPopMatrix();
+        // Text area of the sheet: one pixel of margin around the text, like the vanilla box.
+        float left = -half - 1;
+        float right = left + tile.textWidth + 2;
+        float top = offset - 1;
+        float bottom = offset + 9;
+        behind = room(behind, behindSize);
+        behindSize = quad(
+            behind,
+            behindSize,
+            cx,
+            cy,
+            cz,
+            rightX,
+            rightZ,
+            downX,
+            downY,
+            downZ,
+            left,
+            top,
+            right,
+            bottom,
+            tile.u0,
+            tile.u1,
+            tile.vTop,
+            tile.vBottom,
+            0.125F,
+            0.125F,
+            0.125F,
+            0.125F,
+            light);
+        front = room(front, frontSize);
+        frontSize = quad(
+            front,
+            frontSize,
+            cx,
+            cy,
+            cz,
+            rightX,
+            rightZ,
+            downX,
+            downY,
+            downZ,
+            left,
+            top,
+            right,
+            bottom,
+            tile.u0,
+            tile.u1,
+            tile.vTop,
+            tile.vBottom,
+            1F,
+            1F,
+            1F,
+            1F,
+            light);
+        // Outside the world's entity drawing (an entity shown in a menu, say) nothing will come back to empty the
+        // list, so it is emptied right away.
+        if (!collecting) flush(false);
         return true;
     }
 
-    /** The image is upside down in texture space: its top row is v = 1. */
-    private static void quad(Tessellator t, double left, double top, double right, double bottom, float maxU) {
-        t.addVertexWithUV(left, top, 0.0D, 0.0D, 1.0D);
-        t.addVertexWithUV(left, bottom, 0.0D, 0.0D, 0.0D);
-        t.addVertexWithUV(right, bottom, 0.0D, maxU, 0.0D);
-        t.addVertexWithUV(right, top, 0.0D, maxU, 1.0D);
+    private static float[] room(float[] list, int size) {
+        return size + QUAD <= list.length ? list : java.util.Arrays.copyOf(list, list.length * 2);
+    }
+
+    private static int quad(float[] list, int at, float cx, float cy, float cz, float rightX, float rightZ, float downX,
+        float downY, float downZ, float left, float top, float right, float bottom, float u0, float u1, float vTop,
+        float vBottom, float r, float g, float b, float a, float light) {
+        at = corner(list, at, cx, cy, cz, rightX, rightZ, downX, downY, downZ, left, top, u0, vTop);
+        at = corner(list, at, cx, cy, cz, rightX, rightZ, downX, downY, downZ, left, bottom, u0, vBottom);
+        at = corner(list, at, cx, cy, cz, rightX, rightZ, downX, downY, downZ, right, bottom, u1, vBottom);
+        at = corner(list, at, cx, cy, cz, rightX, rightZ, downX, downY, downZ, right, top, u1, vTop);
+        list[at++] = r;
+        list[at++] = g;
+        list[at++] = b;
+        list[at++] = a;
+        list[at++] = light;
+        return at;
+    }
+
+    private static int corner(float[] list, int at, float cx, float cy, float cz, float rightX, float rightZ,
+        float downX, float downY, float downZ, float across, float down, float u, float v) {
+        list[at++] = cx + across * rightX + down * downX;
+        list[at++] = cy + down * downY;
+        list[at++] = cz + across * rightZ + down * downZ;
+        list[at++] = u;
+        list[at++] = v;
+        return at;
+    }
+
+    /** The world is about to draw its entities: nametags are collected from here on. */
+    public static void beginEntities() {
+        collecting = NametagCacheModule.active() && !broken;
+    }
+
+    /** The world has drawn its entities: every collected nametag goes out now. */
+    public static void endEntities() {
+        if (!collecting) return;
+        collecting = false;
+        flush(true);
+    }
+
+    private static void flush(boolean ownLightmap) {
+        if (behindSize == 0 && frontSize == 0) return;
+        if (sheet == null) {
+            behindSize = frontSize = 0;
+            return;
+        }
+        Minecraft mc = Minecraft.getMinecraft();
+        if (ownLightmap) mc.entityRenderer.enableLightmap(0.0D);
+        GL11.glDisable(GL11.GL_LIGHTING);
+        GL11.glDisable(GL11.GL_CULL_FACE);
+        GL11.glDepthMask(false);
+        GL11.glDisable(GL11.GL_DEPTH_TEST);
+        GL11.glEnable(GL11.GL_BLEND);
+        // The sheet is stored with colour already multiplied by alpha.
+        OpenGlHelper.glBlendFunc(GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA);
+        GL11.glEnable(GL11.GL_TEXTURE_2D);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, sheet.framebufferTexture);
+        GL11.glNormal3f(0.0F, 1.0F, 0.0F);
+
+        send(behind, behindSize);
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthMask(true);
+        send(front, frontSize);
+        behindSize = frontSize = 0;
+
+        OpenGlHelper.glBlendFunc(770, 771, 1, 0);
+        GL11.glEnable(GL11.GL_CULL_FACE);
+        GL11.glEnable(GL11.GL_LIGHTING);
+        GL11.glDisable(GL11.GL_BLEND);
+        GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+        if (ownLightmap) mc.entityRenderer.disableLightmap(0.0D);
+    }
+
+    private static void send(float[] list, int size) {
+        if (size == 0) return;
+        Tessellator t = Tessellator.instance;
+        t.startDrawingQuads();
+        for (int at = 0; at < size; at += QUAD) {
+            t.setColorRGBA_F(list[at + 20], list[at + 21], list[at + 22], list[at + 23]);
+            t.setBrightness((int) list[at + 24]);
+            for (int c = at; c < at + 20; c += 5) {
+                t.addVertexWithUV(list[c], list[c + 1], list[c + 2], list[c + 3], list[c + 4]);
+            }
+        }
+        t.draw();
     }
 
     /** Called at the start of every rendered frame, before the world is drawn. */
     public static void frameStart() {
-        frame++;
+        // Nothing should be left over; if a frame was cut short, do not carry its tags into the next one.
+        behindSize = frontSize = 0;
+        collecting = false;
         if (PENDING.isEmpty() || broken) return;
         Minecraft mc = Minecraft.getMinecraft();
         if (!listening) {
@@ -149,56 +308,44 @@ public final class NametagCache implements IResourceManagerReloadListener {
             return;
         }
         try {
-            if (TILES.size() + PENDING.size() > MAX_TILES) evict();
-            int count = Math.min(PENDING.size(), MAX_BAKES_PER_FRAME);
-            for (int i = 0; i < count; i++) {
-                String name = PENDING.remove(PENDING.size() - 1);
-                if (!TILES.containsKey(name)) TILES.put(name, bake(mc.fontRenderer, name));
-            }
+            bakePending(mc.fontRenderer);
             if (!logged) {
                 logged = true;
-                ClientM.LOG.info("Nametag images are active");
+                ClientM.LOG.info("Nametag sheet is active");
             }
         } catch (Throwable t) {
             broken = true;
             PENDING.clear();
-            ClientM.LOG.warn("Nametag images switched off after an error", t);
+            ClientM.LOG.warn("Nametag sheet switched off after an error", t);
         } finally {
             mc.getFramebuffer()
                 .bindFramebuffer(true);
         }
     }
 
-    private static Tile bake(FontRenderer font, String name) {
-        Tile tile = new Tile();
-        tile.textWidth = Math.min(font.getStringWidth(name), MAX_WIDTH);
-        // Logical layout: [text area: textWidth + 2][gap: 1][white strip: 2], 10 high.
-        int textArea = tile.textWidth + 2;
-        int logicalWidth = textArea + 3;
-        Framebuffer fb = new Framebuffer(logicalWidth * SCALE, 10 * SCALE, false);
-        fb.setFramebufferFilter(GL11.GL_NEAREST);
-        fb.setFramebufferColor(0.0F, 0.0F, 0.0F, 0.0F);
-        fb.framebufferClear();
-        fb.bindFramebuffer(true);
-
+    private static void bakePending(FontRenderer font) {
+        if (sheet == null) {
+            sheet = new Framebuffer(SHEET * SCALE, SHEET * SCALE, false);
+            sheet.setFramebufferFilter(GL11.GL_NEAREST);
+            startSheet();
+        }
+        sheet.bindFramebuffer(true);
         GL11.glMatrixMode(GL11.GL_PROJECTION);
         GL11.glPushMatrix();
         GL11.glLoadIdentity();
-        GL11.glOrtho(0.0D, logicalWidth, 10.0D, 0.0D, -1.0D, 1.0D);
+        GL11.glOrtho(0.0D, SHEET, SHEET, 0.0D, -1.0D, 1.0D);
         GL11.glMatrixMode(GL11.GL_MODELVIEW);
         GL11.glPushMatrix();
         GL11.glLoadIdentity();
         GL11.glDisable(GL11.GL_DEPTH_TEST);
         GL11.glDisable(GL11.GL_LIGHTING);
         GL11.glDisable(GL11.GL_ALPHA_TEST);
-        GL11.glEnable(GL11.GL_BLEND);
-        OpenGlHelper.glBlendFunc(770, 771, 1, 771);
 
-        Gui.drawRect(textArea + 1, 0, logicalWidth, 10, 0xFFFFFFFF);
-        GL11.glEnable(GL11.GL_BLEND);
-        OpenGlHelper.glBlendFunc(770, 771, 1, 771);
-        GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
-        font.drawString(name, 1, 1, 0xFFFFFFFF);
+        int count = Math.min(PENDING.size(), MAX_BAKES_PER_FRAME);
+        for (int i = 0; i < count; i++) {
+            String name = PENDING.remove(PENDING.size() - 1);
+            if (!TILES.containsKey(name)) TILES.put(name, bake(font, name));
+        }
 
         GL11.glDisable(GL11.GL_BLEND);
         GL11.glEnable(GL11.GL_ALPHA_TEST);
@@ -208,37 +355,58 @@ public final class NametagCache implements IResourceManagerReloadListener {
         GL11.glPopMatrix();
         GL11.glMatrixMode(GL11.GL_MODELVIEW);
         GL11.glPopMatrix();
+    }
 
-        // The framebuffer texture can be larger than asked for, so work in its real size.
-        float texWidth = fb.framebufferTextureWidth;
-        tile.textU = textArea * SCALE / texWidth;
-        tile.whiteU = (textArea + 2) * SCALE / texWidth;
-        tile.image = fb;
-        tile.lastUsed = frame;
+    /** Empties the sheet and puts the white patch in its corner. The sheet must be bound or about to be. */
+    private static void startSheet() {
+        TILES.clear();
+        sheet.setFramebufferColor(0.0F, 0.0F, 0.0F, 0.0F);
+        sheet.framebufferClear();
+        sheet.bindFramebuffer(true);
+        cursorX = WHITE + 1;
+        cursorY = 0;
+    }
+
+    private static Tile bake(FontRenderer font, String name) {
+        Tile tile = new Tile();
+        tile.textWidth = Math.min(font.getStringWidth(name), MAX_WIDTH);
+        int area = tile.textWidth + 2;
+        if (cursorX + area > SHEET) {
+            cursorX = 0;
+            cursorY += ROW;
+        }
+        if (cursorY + 10 > SHEET) startSheet(); // full: start over, names come back as they are seen again
+
+        GL11.glEnable(GL11.GL_BLEND);
+        OpenGlHelper.glBlendFunc(770, 771, 1, 771);
+        if (cursorX == WHITE + 1 && cursorY == 0) {
+            Gui.drawRect(0, 0, WHITE, WHITE, 0xFFFFFFFF);
+            GL11.glEnable(GL11.GL_BLEND);
+            OpenGlHelper.glBlendFunc(770, 771, 1, 771);
+        }
+        GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+        font.drawString(name, cursorX + 1, cursorY + 1, 0xFFFFFFFF);
+
+        // The sheet is upside down in texture space: its top row is v = 1.
+        tile.u0 = cursorX / (float) SHEET;
+        tile.u1 = (cursorX + area) / (float) SHEET;
+        tile.vTop = 1F - cursorY / (float) SHEET;
+        tile.vBottom = 1F - (cursorY + 10) / (float) SHEET;
+        cursorX += area + 1;
         return tile;
     }
 
-    /** Drops every image not used in the last few seconds of frames; all of them if that is not enough. */
-    private static void evict() {
-        long cutoff = frame - 2000;
-        for (Iterator<Tile> it = TILES.values()
-            .iterator(); it.hasNext();) {
-            Tile tile = it.next();
-            if (tile.lastUsed < cutoff) {
-                tile.image.deleteFramebuffer();
-                it.remove();
-            }
-        }
-        if (TILES.size() + PENDING.size() > MAX_TILES) clear();
-    }
-
     public static void clear() {
-        for (Tile tile : TILES.values()) tile.image.deleteFramebuffer();
         TILES.clear();
         PENDING.clear();
+        behindSize = frontSize = 0;
+        if (sheet != null) {
+            sheet.deleteFramebuffer();
+            sheet = null;
+        }
     }
 
-    /** A new texture pack can change the font, so every image is made again. */
+    /** A new texture pack can change the font, so every name is written again. */
     @Override
     public void onResourceManagerReload(IResourceManager manager) {
         clear();
