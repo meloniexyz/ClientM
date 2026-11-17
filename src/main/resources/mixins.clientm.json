@@ -20,6 +20,7 @@
     "MixinRender_NametagTile",
     "MixinRenderGlobal_NametagBatch",
     "MixinEntity_LightCache",
+    "AccessorNetworkManager",
     "MixinSplashProgress_Theme",
     "MixinSplashProgressThread_Theme",
     "MixinSplashFontRenderer_Theme",

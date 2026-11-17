@@ -102,6 +102,7 @@ public class ModuleManager {
         register(new LightCacheModule());
         register(new FastParticlesModule());
         register(new BorderlessFullscreenModule());
+        register(new com.clientm.module.impl.HitFixModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
@@ -144,6 +145,7 @@ public class ModuleManager {
     public void onRenderTick(TickEvent.RenderTickEvent event) {
         if (event.phase != TickEvent.Phase.START) return;
         com.clientm.render.NametagCache.frameStart();
+        com.clientm.module.impl.HitFixModule.frame();
     }
 
     @SubscribeEvent
