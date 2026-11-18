@@ -44,8 +44,6 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     private int nextId = 1;
     private long nextSync = 1;
-    private int drawFramebuffer;
-    private float clearR, clearG, clearB, clearA;
     private float frameR, frameG, frameB;
     private List<String> extensions = new ArrayList<>();
     private final Map<Integer, Integer> boundBuffers = new HashMap<>();
@@ -154,15 +152,15 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     public void clearColor(float red, float green, float blue, float alpha) {
-        clearR = red;
-        clearG = green;
-        clearB = blue;
-        clearA = alpha;
+        res().ctx().clearR = red;
+        res().ctx().clearG = green;
+        res().ctx().clearB = blue;
+        res().ctx().clearA = alpha;
     }
 
     @Override
     public void bindFramebuffer(int target, int framebuffer) {
-        if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) drawFramebuffer = framebuffer;
+        if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) res().ctx().drawFramebuffer = framebuffer;
     }
 
     // ------------------------------------------------------------------ questions the game asks
@@ -442,9 +440,19 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     // ================================================================== stage 2: frames, buffers, textures, syncs
 
-    private float clearDepthValue = 1f;
-    private int clearStencilValue;
     private int proxyWidth, proxyHeight;
+    private int texImageNoTexture;
+    private int texLog;
+    private int misfitLogs;
+    private final java.util.ArrayDeque<String> recentBinds = new java.util.ArrayDeque<>();
+
+    private void bindLog(String event) {
+        if (!DEBUG_TEX) return;
+        if (recentBinds.size() >= 12) recentBinds.removeFirst();
+        recentBinds.addLast(event);
+    }
+
+    private static final boolean DEBUG_TEX = System.getenv("CLIENTM_VK_DEBUG_TEX") != null;
 
     private volatile GLResources res;
 
@@ -480,28 +488,28 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     public void clearDepth(double depth) {
-        clearDepthValue = (float) depth;
+        res().ctx().clearDepth = (float) depth;
     }
 
     @Override
     public void clearStencil(int s) {
-        clearStencilValue = s;
+        res().ctx().clearStencil = s;
     }
 
     @Override
     public void clear(int mask) {
-        if (drawFramebuffer != 0) return; // framebuffers come with drawing (next step)
+        if (res().ctx().drawFramebuffer != 0) return; // framebuffers come with drawing (next step)
         GLResources r = res();
         r.ensureScreen();
         r.clearImages(
             r.screenColor,
             r.screenDepth,
             (mask & 0x4000) != 0,
-            new float[] { clearR, clearG, clearB, clearA },
+            new float[] { res().ctx().clearR, res().ctx().clearG, res().ctx().clearB, res().ctx().clearA },
             (mask & 0x100) != 0,
-            clearDepthValue,
+            res().ctx().clearDepth,
             (mask & 0x400) != 0,
-            clearStencilValue);
+            res().ctx().clearStencil);
     }
 
     // ------------------------------------------------------------------ buffers
@@ -525,7 +533,7 @@ public final class VulkanRenderBackend extends RenderBackend {
         if (b != null && b.vk != null) synchronized (r.lock) {
             b.vk.release(r.dev);
         }
-        for (int i = 0; i < r.bound.length; i++) if (r.bound[i] == buffer) r.bound[i] = 0;
+        for (int i = 0; i < r.ctx().bound.length; i++) if (r.ctx().bound[i] == buffer) r.ctx().bound[i] = 0;
     }
 
     @Override
@@ -541,7 +549,7 @@ public final class VulkanRenderBackend extends RenderBackend {
     @Override
     public void bindBuffer(int target, int buffer) {
         GLResources r = res();
-        r.bound[GLResources.slot(target)] = buffer;
+        r.ctx().bound[GLResources.slot(target)] = buffer;
         if (buffer != 0) r.buffer(buffer);
     }
 
@@ -774,7 +782,8 @@ public final class VulkanRenderBackend extends RenderBackend {
         if (t != null && t.image != null) synchronized (r.lock) {
             t.image.release(r.dev);
         }
-        for (int i = 0; i < r.boundTextures.length; i++) if (r.boundTextures[i] == texture) r.boundTextures[i] = 0;
+        for (int i = 0; i < r.ctx().boundTextures.length; i++)
+            if (r.ctx().boundTextures[i] == texture) r.ctx().boundTextures[i] = 0;
     }
 
     @Override
@@ -784,20 +793,23 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     public void activeTexture(int texture) {
-        res().activeUnit = Math.max(0, Math.min(GLResources.UNITS - 1, texture - 0x84C0));
+        bindLog("active " + (texture - 0x84C0));
+        res().ctx().activeUnit = Math.max(0, Math.min(GLResources.UNITS - 1, texture - 0x84C0));
     }
 
     @Override
     public void bindTexture(int target, int texture) {
+        bindLog("bind 0x" + Integer.toHexString(target) + " " + texture);
         GLResources r = res();
-        r.boundTextures[r.activeUnit] = texture;
+        r.ctx().boundTextures[r.ctx().activeUnit] = texture;
         if (texture != 0) r.texture(texture);
     }
 
     @Override
     public void bindTextureUnit(int unit, int texture) {
+        bindLog("unit " + unit + " " + texture);
         GLResources r = res();
-        if (unit >= 0 && unit < GLResources.UNITS) r.boundTextures[unit] = texture;
+        if (unit >= 0 && unit < GLResources.UNITS) r.ctx().boundTextures[unit] = texture;
         if (texture != 0) r.texture(texture);
     }
 
@@ -806,16 +818,16 @@ public final class VulkanRenderBackend extends RenderBackend {
         GLResources r = res();
         switch (pname) {
             case 0x0CF2:
-                r.unpackRowLength = param;
+                r.ctx().unpackRowLength = param;
                 break;
             case 0x0CF3:
-                r.unpackSkipRows = param;
+                r.ctx().unpackSkipRows = param;
                 break;
             case 0x0CF4:
-                r.unpackSkipPixels = param;
+                r.ctx().unpackSkipPixels = param;
                 break;
             case 0x0CF5:
-                r.unpackAlignment = param;
+                r.ctx().unpackAlignment = param;
                 break;
             default:
                 break;
@@ -826,12 +838,26 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     private void image2D(GLResources.GLTexture t, int target, int level, int internal, int width, int height,
         int format, int type, long pixels) {
+        if (DEBUG_TEX && texLog++ < 100000) LOG.info(
+            "image2D tex={} target=0x{} level={} {}x{} internal=0x{} unit={} pixels={}",
+            t == null ? -1 : t.id,
+            Integer.toHexString(target),
+            level,
+            width,
+            height,
+            Integer.toHexString(internal),
+            res().ctx().activeUnit,
+            pixels != 0);
         if (target == GL_PROXY_TEXTURE_2D) {
             proxyWidth = width;
             proxyHeight = height;
             return;
         }
-        if (t == null || target != GL_TEXTURE_2D) return;
+        if (t == null || target != GL_TEXTURE_2D) {
+            if (t == null && texImageNoTexture++ < 4)
+                LOG.warn("texImage2D with no texture bound (unit {})", res().ctx().activeUnit);
+            return;
+        }
         GLResources r = res();
         if (level == 0) {
             r.define(t, internal, width, height, GLResources.fullChain(width, height, t.maxLevel));
@@ -903,12 +929,23 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     public void texStorage2D(int target, int levels, int internalFormat, int width, int height) {
+        if (DEBUG_TEX) LOG.info(
+            "texStorage2D target=0x{} levels={} {}x{} tex={}",
+            Integer.toHexString(target),
+            levels,
+            width,
+            height,
+            res().boundTexture() == null ? -1 : res().boundTexture().id);
         GLResources.GLTexture t = res().boundTexture();
         if (t != null && target == GL_TEXTURE_2D) res().define(t, internalFormat, width, height, levels);
     }
 
     private void subImage(GLResources.GLTexture t, int level, int x, int y, int w, int h, int format, int type,
         long pixels) {
+        if (DEBUG_TEX && t != null
+            && t.image != null
+            && (x + w > t.image.width || y + h > t.image.height)
+            && misfitLogs++ < 3) LOG.info("misfit into tex {} after binds: {}", t.id, String.join(" | ", recentBinds));
         if (t != null && pixels != 0) res().upload(t, level, x, y, w, h, format, type, pixels);
     }
 

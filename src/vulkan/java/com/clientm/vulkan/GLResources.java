@@ -45,8 +45,6 @@ final class GLResources {
     }
 
     final Map<Integer, GLBuffer> buffers = new HashMap<>();
-    /** Buffer bound to each OpenGL target (see {@link #slot}). */
-    final int[] bound = new int[16];
 
     // ------------------------------------------------------------------ textures
 
@@ -62,6 +60,8 @@ final class GLResources {
         int compareMode, compareFunc = 0x0203;
         /** Bumped whenever sampling settings change, so cached samplers are rebuilt. */
         int samplerVersion;
+        /** Sizes this texture has had, for diagnostics. */
+        final StringBuilder history = new StringBuilder();
 
         GLTexture(int id) {
             this.id = id;
@@ -70,11 +70,30 @@ final class GLResources {
 
     final Map<Integer, GLTexture> textures = new HashMap<>();
     static final int UNITS = 32;
-    final int[] boundTextures = new int[UNITS];
-    int activeUnit;
 
-    // pixel transfer settings (glPixelStorei)
-    int unpackRowLength, unpackSkipPixels, unpackSkipRows, unpackAlignment = 4;
+    private int misfits;
+
+    /**
+     * What OpenGL keeps per context: bindings, the active texture unit, pixel transfer settings and clear values.
+     * Forge's loading screen draws on its own thread with its own context, so this is kept per thread.
+     */
+    static final class Ctx {
+
+        /** Buffer bound to each OpenGL target (see {@link #slot}). */
+        final int[] bound = new int[16];
+        final int[] boundTextures = new int[UNITS];
+        int activeUnit;
+        int unpackRowLength, unpackSkipPixels, unpackSkipRows, unpackAlignment = 4;
+        int drawFramebuffer, readFramebuffer;
+        float clearR, clearG, clearB, clearA, clearDepth = 1f;
+        int clearStencil;
+    }
+
+    private final ThreadLocal<Ctx> context = ThreadLocal.withInitial(Ctx::new);
+
+    Ctx ctx() {
+        return context.get();
+    }
 
     // ------------------------------------------------------------------ the game's screen image
 
@@ -132,7 +151,7 @@ final class GLResources {
     }
 
     GLBuffer bufferAt(int target) {
-        return buffers.get(bound[slot(target)]);
+        return buffers.get(ctx().bound[slot(target)]);
     }
 
     GLBuffer buffer(int id) {
@@ -246,7 +265,7 @@ final class GLResources {
     }
 
     GLTexture boundTexture() {
-        return textures.get(boundTextures[activeUnit]);
+        return textures.get(ctx().boundTextures[ctx().activeUnit]);
     }
 
     /** Makes sure the texture has an image of this size and format, with room for its mip levels. */
@@ -260,6 +279,12 @@ final class GLResources {
             if (img != null) img.release(dev);
             t.image = new VulkanImage(dev, width, height, levels, format, depth);
             t.internal = internal;
+            if (t.history.length() < 300) t.history.append(width)
+                .append('x')
+                .append(height)
+                .append('/')
+                .append(levels)
+                .append(' ');
         }
     }
 
@@ -275,11 +300,32 @@ final class GLResources {
     void upload(GLTexture t, int level, int x, int y, int width, int height, int glFormat, int glType, long pixels) {
         VulkanImage img = t.image;
         if (img == null || pixels == 0 || width <= 0 || height <= 0 || img.depth) return;
+        int lw = Math.max(1, img.width >> level), lh = Math.max(1, img.height >> level);
+        if (level >= img.levels || x < 0 || y < 0 || x + width > lw || y + height > lh) {
+            // Never record an upload that does not fit: the GPU would reject the whole frame.
+            if (misfits++ < 8) {
+                org.apache.logging.log4j.LogManager.getLogger("ClientM/Vulkan")
+                    .warn(
+                        "Skipped an upload that does not fit: texture {} is {}x{} ({} levels), upload {}x{} at {},{} level {}; unit {} history {}",
+                        t.id,
+                        img.width,
+                        img.height,
+                        img.levels,
+                        width,
+                        height,
+                        x,
+                        y,
+                        level,
+                        ctx().activeUnit,
+                        t.history);
+            }
+            return;
+        }
         int texel = Formats.texelSize(img.format);
         int srcTexel = sourceTexelSize(glFormat, glType);
-        int rowLength = unpackRowLength > 0 ? unpackRowLength : width;
-        long srcRow = align((long) rowLength * srcTexel, unpackAlignment);
-        long src = pixels + unpackSkipRows * srcRow + (long) unpackSkipPixels * srcTexel;
+        int rowLength = ctx().unpackRowLength > 0 ? ctx().unpackRowLength : width;
+        long srcRow = align((long) rowLength * srcTexel, ctx().unpackAlignment);
+        long src = pixels + ctx().unpackSkipRows * srcRow + (long) ctx().unpackSkipPixels * srcTexel;
         long n = (long) width * height * texel;
         synchronized (lock) {
             ByteBuffer tmp = MemoryUtil.memAlloc((int) n);

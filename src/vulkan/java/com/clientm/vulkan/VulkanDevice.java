@@ -161,13 +161,24 @@ final class VulkanDevice {
             .pApplicationName(stack.UTF8("ClientM"))
             .pEngineName(stack.UTF8("ClientM Vulkan"))
             .apiVersion(VK13.VK_API_VERSION_1_3);
+        boolean validate = Validation.requested();
+        if (validate) {
+            PointerBuffer more = stack.mallocPointer(extensions.remaining() + 1);
+            for (int i = 0; i < extensions.remaining(); i++) more.put(i, extensions.get(i));
+            more.put(
+                extensions.remaining(),
+                stack.UTF8(org.lwjgl.vulkan.EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
+            extensions = more;
+        }
         VkInstanceCreateInfo info = VkInstanceCreateInfo.calloc(stack)
             .sType$Default()
             .pApplicationInfo(app)
             .ppEnabledExtensionNames(extensions);
+        if (validate) info.ppEnabledLayerNames(stack.pointers(stack.UTF8("VK_LAYER_KHRONOS_validation")));
         PointerBuffer pInstance = stack.mallocPointer(1);
         check(vkCreateInstance(info, null, pInstance), "create the Vulkan instance");
         instance = new VkInstance(pInstance.get(0), info);
+        if (validate) Validation.attach(instance);
     }
 
     private void pickGpu(MemoryStack stack) {
@@ -514,100 +525,104 @@ final class VulkanDevice {
      */
     void endFrame(VulkanImage screen) {
         VkCommandBuffer cmd = cmd();
-        beforeSubmit.run();
-        int index = -1;
-        int f = slot;
-        try (MemoryStack stack = stackPush()) {
-            if (needsRebuild) {
-                vkDeviceWaitIdle(device);
-                createSwapchain();
+        try {
+            beforeSubmit.run();
+            int index = -1;
+            int f = slot;
+            try (MemoryStack stack = stackPush()) {
+                if (needsRebuild) {
+                    vkDeviceWaitIdle(device);
+                    createSwapchain();
+                }
+                if (!needsRebuild) {
+                    IntBuffer pIndex = stack.mallocInt(1);
+                    int acquired = vkAcquireNextImageKHR(
+                        device,
+                        swapchain,
+                        Long.MAX_VALUE,
+                        imageReady[f],
+                        VK_NULL_HANDLE,
+                        pIndex);
+                    if (acquired == VK_SUCCESS || acquired == VK_SUBOPTIMAL_KHR) index = pIndex.get(0);
+                    else needsRebuild = true;
+                }
+                if (index >= 0 && screen != null) {
+                    Barriers.full(cmd);
+                    Barriers.image(
+                        cmd,
+                        swapImages[index],
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                    VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
+                    blit.get(0)
+                        .srcSubresource(
+                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                .layerCount(1))
+                        .dstSubresource(
+                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                .layerCount(1));
+                    blit.get(0)
+                        .srcOffsets(0)
+                        .set(0, screen.height, 0);
+                    blit.get(0)
+                        .srcOffsets(1)
+                        .set(screen.width, 0, 1);
+                    blit.get(0)
+                        .dstOffsets(1)
+                        .set(swapWidth, swapHeight, 1);
+                    vkCmdBlitImage(
+                        cmd,
+                        screen.image,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        swapImages[index],
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        blit,
+                        VK_FILTER_NEAREST);
+                    Barriers.image(
+                        cmd,
+                        swapImages[index],
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                } else if (index >= 0) {
+                    Barriers.image(
+                        cmd,
+                        swapImages[index],
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                }
+                vkEndCommandBuffer(cmd);
+                vkResetFences(device, frameDone[f]);
+                VkSubmitInfo submit = VkSubmitInfo.calloc(stack)
+                    .sType$Default()
+                    .pCommandBuffers(stack.pointers(cmd));
+                if (index >= 0) {
+                    submit.waitSemaphoreCount(1)
+                        .pWaitSemaphores(stack.longs(imageReady[f]))
+                        .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
+                        .pSignalSemaphores(stack.longs(renderDone[index]));
+                }
+                check(vkQueueSubmit(queue, submit, frameDone[f]), "submit a frame");
+                if (index >= 0) {
+                    int presented = vkQueuePresentKHR(
+                        queue,
+                        VkPresentInfoKHR.calloc(stack)
+                            .sType$Default()
+                            .pWaitSemaphores(stack.longs(renderDone[index]))
+                            .swapchainCount(1)
+                            .pSwapchains(stack.longs(swapchain))
+                            .pImageIndices(stack.ints(index)));
+                    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) needsRebuild = true;
+                    else if (presented != VK_SUCCESS) check(presented, "present a frame");
+                }
             }
-            if (!needsRebuild) {
-                IntBuffer pIndex = stack.mallocInt(1);
-                int acquired = vkAcquireNextImageKHR(
-                    device,
-                    swapchain,
-                    Long.MAX_VALUE,
-                    imageReady[f],
-                    VK_NULL_HANDLE,
-                    pIndex);
-                if (acquired == VK_SUCCESS || acquired == VK_SUBOPTIMAL_KHR) index = pIndex.get(0);
-                else needsRebuild = true;
-            }
-            if (index >= 0 && screen != null) {
-                Barriers.full(cmd);
-                Barriers.image(
-                    cmd,
-                    swapImages[index],
-                    VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-                VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
-                blit.get(0)
-                    .srcSubresource(
-                        s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                            .layerCount(1))
-                    .dstSubresource(
-                        s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                            .layerCount(1));
-                blit.get(0)
-                    .srcOffsets(0)
-                    .set(0, screen.height, 0);
-                blit.get(0)
-                    .srcOffsets(1)
-                    .set(screen.width, 0, 1);
-                blit.get(0)
-                    .dstOffsets(1)
-                    .set(swapWidth, swapHeight, 1);
-                vkCmdBlitImage(
-                    cmd,
-                    screen.image,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    swapImages[index],
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    blit,
-                    VK_FILTER_NEAREST);
-                Barriers.image(
-                    cmd,
-                    swapImages[index],
-                    VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-            } else if (index >= 0) {
-                Barriers.image(
-                    cmd,
-                    swapImages[index],
-                    VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-            }
-            vkEndCommandBuffer(cmd);
-            vkResetFences(device, frameDone[f]);
-            VkSubmitInfo submit = VkSubmitInfo.calloc(stack)
-                .sType$Default()
-                .pCommandBuffers(stack.pointers(cmd));
-            if (index >= 0) {
-                submit.waitSemaphoreCount(1)
-                    .pWaitSemaphores(stack.longs(imageReady[f]))
-                    .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
-                    .pSignalSemaphores(stack.longs(renderDone[index]));
-            }
-            check(vkQueueSubmit(queue, submit, frameDone[f]), "submit a frame");
-            if (index >= 0) {
-                int presented = vkQueuePresentKHR(
-                    queue,
-                    VkPresentInfoKHR.calloc(stack)
-                        .sType$Default()
-                        .pWaitSemaphores(stack.longs(renderDone[index]))
-                        .swapchainCount(1)
-                        .pSwapchains(stack.longs(swapchain))
-                        .pImageIndices(stack.ints(index)));
-                if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) needsRebuild = true;
-                else if (presented != VK_SUCCESS) check(presented, "present a frame");
-            }
+        } finally {
+            // Even if submitting failed, this command buffer is finished; the next frame starts a fresh one.
+            recording = false;
+            frameNumber++;
         }
-        recording = false;
-        frameNumber++;
     }
 
     void destroy() {
