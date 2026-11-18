@@ -166,6 +166,7 @@ public class ModuleManager {
         }
         for (Module m : all) if (m.enabled || editing) m.onTick();
         BorderlessFullscreenModule.sync();
+        com.clientm.module.impl.CustomSkiesModule.sync();
     }
 
     @SubscribeEvent
