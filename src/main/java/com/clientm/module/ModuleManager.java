@@ -103,6 +103,7 @@ public class ModuleManager {
         register(new FastParticlesModule());
         register(new BorderlessFullscreenModule());
         register(new com.clientm.module.impl.HitFixModule());
+        register(new com.clientm.module.impl.CustomSkiesModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
