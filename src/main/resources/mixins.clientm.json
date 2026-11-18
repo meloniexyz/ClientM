@@ -22,6 +22,7 @@
     "MixinEntity_LightCache",
     "AccessorNetworkManager",
     "AccessorMinecraft_Session",
+    "MixinEntityRenderer_HurtCam17",
     "MixinSplashProgress_Theme",
     "MixinSplashProgressThread_Theme",
     "MixinSplashFontRenderer_Theme",

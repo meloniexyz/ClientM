@@ -52,6 +52,7 @@ public class HitFixModule extends Module {
     private final BoolSetting pearls = add(new BoolSetting("pearls", "Ender pearls", true));
     private final BoolSetting knockback = add(new BoolSetting("knockback", "Knockback (self knockback)", true));
     private final BoolSetting heads = add(new BoolSetting("heads", "Player head movement", true));
+    private final BoolSetting hurtCamera17 = add(new BoolSetting("hurtcam17", "1.7 hurt camera", true));
 
     private boolean broken;
     private boolean logged;
@@ -64,6 +65,12 @@ public class HitFixModule extends Module {
     @Override
     public String description() {
         return "Server updates on every frame instead of every tick, like 1.8";
+    }
+
+    /** Whether the hurt camera should keep its 1.7 look; see MixinEntityRenderer_HurtCam17. */
+    public static boolean hurtCamera17() {
+        HitFixModule m = instance;
+        return m != null && m.enabled && m.hurtCamera17.value;
     }
 
     /** Called at the start of every rendered frame. */
