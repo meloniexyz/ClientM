@@ -38,8 +38,16 @@ public final class ScreenshotTour {
     @SubscribeEvent
     public void onTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
+        if (!launched && packsStarted && !packsDone) {
+            packsMenu();
+            return;
+        }
         if (!launched) {
             if (mc.currentScreen instanceof GuiMainMenu || mc.currentScreen instanceof com.clientm.gui.ClientMainMenu) {
+                if ("packs".equals(System.getenv("CLIENTM_TOUR")) && !packsDone) {
+                    packsMenu();
+                    return;
+                }
                 if ("accounts".equals(System.getenv("CLIENTM_TOUR"))) {
                     accountsTour();
                     return;
@@ -496,6 +504,52 @@ public final class ScreenshotTour {
         if (n == 4) mc.shutdown();
     }
 
+    private boolean packsStarted, packsDone;
+    private int packTicks;
+    private net.minecraft.client.gui.GuiScreen packsMenu;
+
+    /** CLIENTM_TOUR=packs: the resource pack screen at the top, inside a folder and inside a folder in it. */
+    private void packsMenu() {
+        java.io.File root = mc.getResourcePackRepository()
+            .getDirResourcepacks();
+        int t = ++packTicks;
+        if (t == 20) {
+            packsStarted = true;
+            packsMenu = mc.currentScreen;
+            mc.displayGuiScreen(new net.minecraft.client.gui.GuiScreenResourcePacks(packsMenu));
+        }
+        if (t == 40) shot("packs-1-top");
+        if (t == 44) ((com.clientm.gui.PackFolderEntry.Opener) mc.currentScreen)
+            .clientm$openFolder(new java.io.File(root, "PvP Packs"));
+        if (t == 60) shot("packs-2-folder");
+        if (t == 64) ((com.clientm.gui.PackFolderEntry.Opener) mc.currentScreen)
+            .clientm$openFolder(new java.io.File(root, "PvP Packs/Old"));
+        if (t == 80) shot("packs-3-subfolder");
+        if (t == 84) {
+            packsDone = true;
+            mc.displayGuiScreen(packsMenu);
+            launchFirstWorld();
+        }
+    }
+
+    /** Second half of CLIENTM_TOUR=packs: the sky with Custom Skies on, then off. */
+    private void skyTest() {
+        wait = 60;
+        Module m = module("customskies");
+        int n = step++;
+        if (n == 0) {
+            noonAndClear();
+            m.setEnabled(true);
+            mc.thePlayer.rotationPitch = mc.thePlayer.prevRotationPitch = -35f;
+        }
+        if (n == 1) {
+            shot("sky-1-pack");
+            m.setEnabled(false);
+        }
+        if (n == 2) shot("sky-2-normal");
+        if (n == 3) mc.shutdown();
+    }
+
     private int glassX, glassY, glassZ;
 
     /** CLIENTM_TOUR=hud2: potion effects and a sidebar scoreboard on the HUD, then the inventory. */
@@ -544,6 +598,10 @@ public final class ScreenshotTour {
     private void advance() {
         if ("hud2".equals(System.getenv("CLIENTM_TOUR"))) {
             hudTest();
+            return;
+        }
+        if ("packs".equals(System.getenv("CLIENTM_TOUR"))) {
+            skyTest();
             return;
         }
         if ("glass".equals(System.getenv("CLIENTM_TOUR"))) {
