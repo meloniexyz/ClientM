@@ -19,6 +19,7 @@ public abstract class MixinSkyRenderer_Toggle {
 
     @Inject(method = "setup", at = @At("RETURN"), require = 0)
     private static void clientm$customSkiesSwitch(CallbackInfo ci) {
+        CustomSkiesModule.loadedThisStart = true;
         if (!CustomSkiesModule.active()) active = false;
     }
 }

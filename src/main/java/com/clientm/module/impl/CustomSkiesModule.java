@@ -24,6 +24,8 @@ public class CustomSkiesModule extends Module {
     private static final Pattern SECTION = Pattern.compile("better_skies\\s*\\{[^}]*\\}");
 
     private static CustomSkiesModule instance;
+    /** Set by MixinSkyRenderer_Toggle once Angelica's sky code runs, i.e. it was loaded at this start. */
+    public static volatile boolean loadedThisStart;
     /** What the config file was last set to by this session; null until checked. */
     private Boolean written;
 
@@ -35,6 +37,16 @@ public class CustomSkiesModule extends Module {
     @Override
     public String description() {
         return "Skies from resource packs; turning on or off fully applies after a restart";
+    }
+
+    @Override
+    public void onEnable() {
+        // Pack skies need the sky code, which Angelica only loads when the game starts.
+        if (!loadedThisStart && mc.thePlayer != null && mc.ingameGUI != null) {
+            mc.ingameGUI.getChatGUI()
+                .printChatMessage(
+                    new net.minecraft.util.ChatComponentText("§cClientM §7» §fRestart the game to show pack skies."));
+        }
     }
 
     public static boolean active() {
