@@ -23,6 +23,7 @@
     "AccessorNetworkManager",
     "AccessorMinecraft_Session",
     "MixinEntityRenderer_HurtCam17",
+    "MixinResourcePackRepository_Folders",
     "MixinSplashProgress_Theme",
     "MixinSplashProgressThread_Theme",
     "MixinSplashFontRenderer_Theme",

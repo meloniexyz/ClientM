@@ -45,6 +45,12 @@ async function download(item, name) {
     ),
   );
 
+  // Same reason as enableCustomSkies() in src/install.js: resource pack skies need this on before start.
+  zip.addFile(
+    '.minecraft/config/mcpatcherforge.cfg',
+    Buffer.from(['# Configuration file', '', 'better_skies {', '    B:enabled=true', '    B:skybox=true', '}', ''].join('\n')),
+  );
+
   const mb = manifest.defaultHeapGb * 1024;
   const java = process.env.CLIENTM_PRISM_JAVA;
   const cfg = [

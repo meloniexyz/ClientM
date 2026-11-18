@@ -151,6 +151,34 @@ async function fixServerCompatibility(gameDir) {
 }
 
 /**
+ * Custom skies from resource packs (the mcpatcher/sky folder of PvP packs) need Angelica's "better skies" module,
+ * which ships switched off; Angelica then leaves the sky code out entirely, so it must be on before the game starts.
+ * It is switched on once per install. A marker file remembers that, so switching it off again later is respected.
+ */
+async function enableCustomSkies(gameDir) {
+  const marker = path.join(gameDir, 'config', '.clientm-skies-on');
+  if (fs.existsSync(marker)) return;
+  const file = path.join(gameDir, 'config', 'mcpatcherforge.cfg');
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  let text = null;
+  try {
+    text = await fsp.readFile(file, 'utf8');
+  } catch (e) {
+    // first launch: Angelica fills in every other setting with its default
+  }
+  if (text === null || !/better_skies\s*\{/.test(text)) {
+    const block = ['better_skies {', '    B:enabled=true', '    B:skybox=true', '}', ''].join('\n');
+    text = text === null ? '# Configuration file\n\n' + block : text + '\n' + block;
+  } else {
+    text = text.replace(/(better_skies\s*\{[^}]*)/, (section) =>
+      section.replace(/B:enabled=false/, 'B:enabled=true').replace(/B:skybox=false/, 'B:skybox=true'),
+    );
+  }
+  await fsp.writeFile(file, text);
+  await fsp.writeFile(marker, 'ClientM switched on custom skies here once.\n');
+}
+
+/**
  * @param root          data folder (…\AppData\Roaming\ClientM\minecraft)
  * @param manifest      launcher/manifest.json
  * @param resourcesDir  folder holding mods/ClientM.jar
@@ -222,6 +250,7 @@ async function install(root, manifest, resourcesDir, progress) {
   const java = await installJava(root, manifest.javaMajor, progress);
   await installMods(root, manifest, resourcesDir, progress);
   await fixServerCompatibility(path.join(root, 'game'));
+  await enableCustomSkies(path.join(root, 'game'));
   progress('Ready', 1);
 
   return { version, classpath, nativesDir, assetsDir, java, logConfig, logArgument: lf && lf.argument, gameDir: path.join(root, 'game') };
