@@ -9,9 +9,55 @@ function status(text, isError) {
   $('status').classList.toggle('err', !!isError);
 }
 
+// A grey 8x8 head for accounts without a saved face.
+const NO_FACE =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#2a2a33"/></svg>');
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text) e.textContent = text;
+  return e;
+}
+
+function renderAccounts() {
+  const list = $('accList');
+  list.textContent = '';
+  for (const a of st.accounts || []) {
+    const row = el('div', 'accrow' + (a.active ? ' on' : ''));
+    const img = el('img', 'face sm');
+    img.src = a.face || NO_FACE;
+    row.append(img, el('b', '', a.name));
+    if (a.active) row.append(el('span', 'tagon', 'IN USE'));
+    else {
+      const use = el('button', 'use', 'Use');
+      use.onclick = async () => {
+        st = await api.switchAccount(a.uuid);
+        render();
+      };
+      row.append(use);
+    }
+    const x = el('button', 'x', '\u00d7');
+    x.title = 'Remove from this launcher';
+    x.onclick = async () => {
+      st = await api.removeAccount(a.uuid);
+      render();
+    };
+    row.append(x);
+    list.append(row);
+  }
+}
+
 function render() {
   $('accName').textContent = st.account ? st.account.name : 'Not signed in';
-  $('accBtn').textContent = st.account ? 'Sign out' : 'Sign in with Microsoft';
+  $('accFace').src = (st.account && st.account.face) || NO_FACE;
+  $('accBtn').textContent = !st.account
+    ? 'Sign in with Microsoft'
+    : st.accounts.length > 1
+      ? 'Switch account (' + st.accounts.length + ')'
+      : 'Accounts';
+  renderAccounts();
   $('ver').textContent = 'Launcher ' + st.version;
   $('playBtn').disabled = busy || st.running || !st.account;
   $('playBtn').textContent = st.running ? 'Playing' : 'Play';
@@ -31,11 +77,14 @@ function message(e) {
   return String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 }
 
-$('accBtn').onclick = async () => {
-  if (st.account) {
-    st = await api.logout();
-    return render();
-  }
+$('accBtn').onclick = () => (st.account ? $('accDlg').classList.add('show') : signIn());
+$('accClose').onclick = () => $('accDlg').classList.remove('show');
+$('accAdd').onclick = () => {
+  $('accDlg').classList.remove('show');
+  signIn();
+};
+
+async function signIn() {
   if (!st.clientIdSet) return $('settingsBtn').onclick();
   $('loginCode').textContent = '········';
   loginUrl = null;
@@ -48,7 +97,7 @@ $('accBtn').onclick = async () => {
   }
   $('loginDlg').classList.remove('show');
   render();
-};
+}
 $('loginOpen').onclick = () => loginUrl && api.openUrl(loginUrl);
 $('loginCancel').onclick = () => {
   api.cancelLogin();
@@ -119,5 +168,10 @@ $('updateBtn').onclick = () => {
   if (st.running) return status('Close Minecraft first, then restart to update.', true);
   api.installUpdate();
 };
+
+api.on('accounts', (state) => {
+  st = state;
+  render();
+});
 
 refresh();

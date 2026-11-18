@@ -107,7 +107,8 @@ async function minecraftSession(msAccessToken) {
   if (res.status === 404) throw new Error('This account does not own Minecraft: Java Edition.');
   if (!res.ok) throw new Error('Could not read the Minecraft profile (' + res.status + ')');
   const profile = await res.json();
-  return { name: profile.name, uuid: profile.id, accessToken: mc.body.access_token };
+  const skin = (profile.skins || []).find((k) => k.state === 'ACTIVE') || (profile.skins || [])[0];
+  return { name: profile.name, uuid: profile.id, accessToken: mc.body.access_token, skinUrl: skin ? skin.url : null };
 }
 
 module.exports = { startDeviceCode, waitForDeviceCode, refreshMicrosoft, minecraftSession };

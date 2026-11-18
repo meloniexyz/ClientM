@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
 <title>ClientM</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -20,6 +20,19 @@
   .card small { color: var(--text3); display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px; }
   .card b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .link { background: none; color: var(--text2); font-size: 12px; margin-top: 8px; padding: 0; }
+  .acc { display: flex; align-items: center; gap: 10px; }
+  .acc > div { min-width: 0; }
+  .face { width: 32px; height: 32px; border-radius: 6px; image-rendering: pixelated; background: var(--row); flex: none; }
+  .face.sm { width: 26px; height: 26px; border-radius: 5px; }
+  .accrow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--row); margin-bottom: 6px; }
+  .accrow.on { outline: 1px solid var(--accent); }
+  .accrow b { flex: 1; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .accrow .use { background: none; color: var(--text2); font-size: 12px; padding: 2px 6px; }
+  .accrow .use:hover { color: var(--accent); }
+  .accrow .tagon { color: var(--accent); font-size: 11px; font-weight: 700; }
+  .accrow .x { background: none; color: var(--text3); font-size: 16px; padding: 0 4px; line-height: 1; }
+  .accrow .x:hover { color: var(--accent); }
+  .acclist { max-height: 230px; overflow-y: auto; margin-bottom: 12px; }
   .link:hover { color: var(--accent); }
   .sp { flex: 1; }
   .ghost { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; color: var(--text2); font-size: 13px; text-align: left; }
@@ -65,7 +78,10 @@
     <div class="tag">Minecraft 1.7.10</div>
     <div class="card">
       <small>ACCOUNT</small>
-      <b id="accName">Not signed in</b>
+      <div class="acc">
+        <img class="face" id="accFace" alt="">
+        <div><b id="accName">Not signed in</b></div>
+      </div>
       <button class="link" id="accBtn">Sign in with Microsoft</button>
     </div>
     <div class="sp"></div>
@@ -105,6 +121,18 @@
       <div class="rowbtn">
         <button class="ghost" id="loginCancel">Cancel</button>
         <button class="primary" id="loginOpen">Open Microsoft page</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="accDlg">
+    <div class="dialog">
+      <h3>Accounts</h3>
+      <p>Play uses the highlighted account. In the game you can also switch on the main menu.</p>
+      <div class="acclist" id="accList"></div>
+      <div class="rowbtn">
+        <button class="ghost" id="accClose">Close</button>
+        <button class="primary" id="accAdd">Add account</button>
       </div>
     </div>
   </div>

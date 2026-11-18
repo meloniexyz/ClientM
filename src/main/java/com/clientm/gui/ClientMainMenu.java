@@ -37,6 +37,10 @@ public class ClientMainMenu extends GuiScreen {
 
     private SmoothFont font, bold, logo;
     private int top;
+    /** True while the account list under the account button is open. */
+    private boolean accountsOpen;
+    private static final int ACC_H = 20;
+    private static final int ROW_H = 20;
 
     /** Swaps the vanilla title screen for this one whenever the game opens it. */
     public static class Hook {
@@ -107,23 +111,117 @@ public class ClientMainMenu extends GuiScreen {
             f.draw(LABELS[i], x + (BTN_W - f.width(LABELS[i])) / 2, y + 8, lit ? INK : TEXT_2);
         }
 
+        drawAccounts(mouseX, mouseY);
+
         // The running version, bottom left: name in light grey, number in the accent colour so it stands out.
         font.draw("ClientM ", 6, height - 12, TEXT_2);
         font.draw(Tags.VERSION, 6 + font.width("ClientM "), height - 12, 0xFF4D5E);
         font.draw(COPYRIGHT, width - 6 - font.width(COPYRIGHT), height - 12, TEXT_3);
     }
 
+    // ------------------------------------------------------------------ account switcher (top right)
+
+    /** Test aid: opens or closes the account list. */
+    public void setAccountsOpen(boolean open) {
+        accountsOpen = open;
+    }
+
+    private String currentName() {
+        return mc.getSession()
+            .getUsername();
+    }
+
+    private int accountWidth() {
+        return 6 + 14 + 6 + font.width(currentName()) + 8;
+    }
+
+    private int listWidth() {
+        int w = accountWidth();
+        for (Accounts.Account a : Accounts.all()) w = Math.max(w, 6 + 14 + 6 + font.width(a.name) + 8);
+        return Math.max(w, 150);
+    }
+
+    private boolean onAccountButton(int mx, int my) {
+        int w = accountWidth();
+        return mx >= width - 6 - w && mx < width - 6 && my >= 6 && my < 6 + ACC_H;
+    }
+
+    /** The row of the open list under the pointer, or -1. */
+    private int accountRowAt(int mx, int my) {
+        if (!accountsOpen) return -1;
+        int w = listWidth();
+        int x = width - 6 - w;
+        int y = 6 + ACC_H + 4;
+        int rows = Math.max(
+            1,
+            Accounts.all()
+                .size());
+        if (mx < x || mx >= x + w || my < y + 3 || my >= y + 3 + rows * ROW_H) return -1;
+        return (my - y - 3) / ROW_H;
+    }
+
+    private void drawAccounts(int mx, int my) {
+        int w = accountWidth();
+        int x = width - 6 - w;
+        boolean hover = onAccountButton(mx, my) || accountsOpen;
+        round(x, 6, w, ACC_H, hover ? ACCENT : LINE);
+        round(x + 1, 7, w - 2, ACC_H - 2, PANEL);
+        Accounts.drawFace(null, x + 4, 9, 14);
+        font.draw(currentName(), x + 6 + 14 + 6, 13, TEXT);
+
+        if (!accountsOpen) return;
+        java.util.List<Accounts.Account> list = Accounts.all();
+        int lw = listWidth();
+        int lx = width - 6 - lw;
+        int ly = 6 + ACC_H + 4;
+        int rows = Math.max(1, list.size());
+        round(lx, ly, lw, rows * ROW_H + 6, LINE);
+        round(lx + 1, ly + 1, lw - 2, rows * ROW_H + 4, PANEL);
+        if (list.isEmpty()) {
+            font.draw("Add accounts in the ClientM launcher", lx + 8, ly + 3 + 6, TEXT_3);
+            return;
+        }
+        int over = accountRowAt(mx, my);
+        for (int i = 0; i < list.size(); i++) {
+            Accounts.Account a = list.get(i);
+            int ry = ly + 3 + i * ROW_H;
+            boolean current = Accounts.isCurrent(a);
+            if (i == over && !current) round(lx + 3, ry, lw - 6, ROW_H, 0x22FFFFFF);
+            Accounts.drawFace(a, lx + 7, ry + 3, 14);
+            font.draw(a.name, lx + 7 + 14 + 6, ry + 7, current ? 0xFF4D5E : i == over ? TEXT : TEXT_2);
+        }
+    }
+
     @Override
     protected void mouseClicked(int mouseX, int mouseY, int button) {
         if (button != 0) return;
+        if (onAccountButton(mouseX, mouseY)) {
+            accountsOpen = !accountsOpen;
+            click();
+            return;
+        }
+        if (accountsOpen) {
+            int row = accountRowAt(mouseX, mouseY);
+            java.util.List<Accounts.Account> list = Accounts.all();
+            if (row >= 0 && row < list.size()) {
+                Accounts.switchTo(list.get(row));
+                click();
+            }
+            accountsOpen = false;
+            return;
+        }
         int i = buttonAt(mouseX, mouseY);
         if (i < 0) return;
-        mc.getSoundHandler()
-            .playSound(PositionedSoundRecord.func_147674_a(new ResourceLocation("gui.button.press"), 1.0F));
+        click();
         if (i == 0) mc.displayGuiScreen(new GuiSelectWorld(this));
         else if (i == 1) mc.displayGuiScreen(new GuiMultiplayer(this));
         else if (i == 2) mc.displayGuiScreen(new GuiOptions(this, mc.gameSettings));
         else mc.shutdown();
+    }
+
+    private void click() {
+        mc.getSoundHandler()
+            .playSound(PositionedSoundRecord.func_147674_a(new ResourceLocation("gui.button.press"), 1.0F));
     }
 
     @Override

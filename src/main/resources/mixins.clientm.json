@@ -21,6 +21,7 @@
     "MixinRenderGlobal_NametagBatch",
     "MixinEntity_LightCache",
     "AccessorNetworkManager",
+    "AccessorMinecraft_Session",
     "MixinSplashProgress_Theme",
     "MixinSplashProgressThread_Theme",
     "MixinSplashFontRenderer_Theme",

@@ -40,6 +40,10 @@ public final class ScreenshotTour {
         if (event.phase != TickEvent.Phase.END) return;
         if (!launched) {
             if (mc.currentScreen instanceof GuiMainMenu || mc.currentScreen instanceof com.clientm.gui.ClientMainMenu) {
+                if ("accounts".equals(System.getenv("CLIENTM_TOUR"))) {
+                    accountsTour();
+                    return;
+                }
                 // Give the title screen a moment to draw, photograph it, then load the world.
                 if (++menuTicks == 30) shot("00-main-menu");
                 if (menuTicks > 34) launchFirstWorld();
@@ -77,6 +81,30 @@ public final class ScreenshotTour {
             ClientM.LOG.error("Screenshot tour: could not load a world", t);
             mc.shutdown();
         }
+    }
+
+    /** CLIENTM_TOUR=accounts: the account list on the main menu, then a switch to the second account. */
+    private void accountsTour() {
+        com.clientm.gui.ClientMainMenu menu = mc.currentScreen instanceof com.clientm.gui.ClientMainMenu
+            ? (com.clientm.gui.ClientMainMenu) mc.currentScreen
+            : null;
+        menuTicks++;
+        if (menuTicks == 20) shot("accounts-0-closed");
+        if (menuTicks == 24 && menu != null) menu.setAccountsOpen(true);
+        if (menuTicks == 32) shot("accounts-1-open");
+        if (menuTicks == 36) {
+            java.util.List<com.clientm.gui.Accounts.Account> list = com.clientm.gui.Accounts.all();
+            if (list.size() > 1) com.clientm.gui.Accounts.switchTo(list.get(1));
+            if (menu != null) menu.setAccountsOpen(false);
+        }
+        if (menuTicks == 44) {
+            shot("accounts-2-switched");
+            com.clientm.ClientM.LOG.info(
+                "Accounts tour: session is now {}",
+                mc.getSession()
+                    .getUsername());
+        }
+        if (menuTicks == 50) mc.shutdown();
     }
 
     private void shot(String name) {
