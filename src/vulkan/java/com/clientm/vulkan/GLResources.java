@@ -1,0 +1,494 @@
+package com.clientm.vulkan;
+
+import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.vulkan.VK10.*;
+
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.VkBufferCopy;
+import org.lwjgl.vulkan.VkBufferImageCopy;
+import org.lwjgl.vulkan.VkClearColorValue;
+import org.lwjgl.vulkan.VkClearDepthStencilValue;
+import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkImageBlit;
+import org.lwjgl.vulkan.VkImageSubresourceRange;
+
+import me.eigenraven.lwjgl3ify.api.Lwjgl3Aware;
+
+/**
+ * The OpenGL objects the game creates (buffers, textures, sync objects) and the game's screen image, kept as Vulkan
+ * objects. Everything that records GPU work holds {@link #lock}, because Forge's loading screen draws from its own
+ * thread while the game loads on the main thread.
+ */
+@Lwjgl3Aware
+final class GLResources {
+
+    /** One lock per device: every thread that records GPU work takes it. */
+    final Object lock;
+    final VulkanDevice dev;
+
+    // ------------------------------------------------------------------ buffers
+
+    static final class GLBuffer {
+
+        final int id;
+        VulkanBuffer vk;
+        boolean persistent;
+
+        GLBuffer(int id) {
+            this.id = id;
+        }
+    }
+
+    final Map<Integer, GLBuffer> buffers = new HashMap<>();
+    /** Buffer bound to each OpenGL target (see {@link #slot}). */
+    final int[] bound = new int[16];
+
+    // ------------------------------------------------------------------ textures
+
+    static final class GLTexture {
+
+        final int id;
+        VulkanImage image;
+        int internal = Formats.GL_RGBA8;
+        int maxLevel = 1000;
+        int minFilter = 0x2702, magFilter = 0x2601; // NEAREST_MIPMAP_LINEAR, LINEAR (OpenGL defaults)
+        int wrapS = 0x2901, wrapT = 0x2901; // REPEAT
+        float anisotropy = 1f, lodBias, minLod = -1000f, maxLod = 1000f;
+        int compareMode, compareFunc = 0x0203;
+        /** Bumped whenever sampling settings change, so cached samplers are rebuilt. */
+        int samplerVersion;
+
+        GLTexture(int id) {
+            this.id = id;
+        }
+    }
+
+    final Map<Integer, GLTexture> textures = new HashMap<>();
+    static final int UNITS = 32;
+    final int[] boundTextures = new int[UNITS];
+    int activeUnit;
+
+    // pixel transfer settings (glPixelStorei)
+    int unpackRowLength, unpackSkipPixels, unpackSkipRows, unpackAlignment = 4;
+
+    // ------------------------------------------------------------------ the game's screen image
+
+    VulkanImage screenColor, screenDepth;
+
+    // ------------------------------------------------------------------ staging memory for uploads
+
+    /** The staging block the last {@link #stage} call wrote into. */
+    private VulkanBuffer staging;
+    private final VulkanBuffer[] stagingBlocks = new VulkanBuffer[VulkanDevice.FRAMES_IN_FLIGHT];
+    private final long[] stagingUsed = new long[VulkanDevice.FRAMES_IN_FLIGHT];
+    private final long[] stagingFrame = new long[VulkanDevice.FRAMES_IN_FLIGHT];
+
+    GLResources(VulkanDevice dev) {
+        this.dev = dev;
+        this.lock = dev;
+    }
+
+    /** The OpenGL buffer targets the game uses, as small indices. */
+    static int slot(int target) {
+        switch (target) {
+            case 0x8892:
+                return 0; // ARRAY_BUFFER
+            case 0x8893:
+                return 1; // ELEMENT_ARRAY_BUFFER
+            case 0x88EB:
+                return 2; // PIXEL_PACK
+            case 0x88EC:
+                return 3; // PIXEL_UNPACK
+            case 0x8A11:
+                return 4; // UNIFORM
+            case 0x8C2A:
+                return 5; // TEXTURE_BUFFER
+            case 0x8F36:
+                return 6; // COPY_READ
+            case 0x8F37:
+                return 7; // COPY_WRITE
+            case 0x8F3F:
+                return 8; // DRAW_INDIRECT
+            case 0x90D2:
+                return 9; // SHADER_STORAGE
+            case 0x90EE:
+                return 10; // DISPATCH_INDIRECT
+            case 0x80EE:
+                return 11; // PARAMETER_BUFFER
+            case 0x92C0:
+                return 12; // ATOMIC_COUNTER
+            case 0x8C8E:
+                return 13; // TRANSFORM_FEEDBACK
+            case 0x9192:
+                return 14; // QUERY
+            default:
+                return 15;
+        }
+    }
+
+    GLBuffer bufferAt(int target) {
+        return buffers.get(bound[slot(target)]);
+    }
+
+    GLBuffer buffer(int id) {
+        GLBuffer b = buffers.get(id);
+        if (b == null && id != 0) {
+            b = new GLBuffer(id);
+            buffers.put(id, b);
+        }
+        return b;
+    }
+
+    /** True when the graphics card may still read this buffer's current memory. */
+    boolean inUse(VulkanBuffer b) {
+        return b != null && b.lastUse != 0 && !dev.isDone(b.lastUse);
+    }
+
+    /** Gives the buffer new memory of the given size (the old memory is freed once the GPU is done with it). */
+    void allocate(GLBuffer b, long size, ByteBuffer data, boolean persistent) {
+        if (b == null) return;
+        synchronized (lock) {
+            if (b.vk != null) b.vk.release(dev);
+            b.vk = new VulkanBuffer(dev, Math.max(size, 16));
+            b.persistent = persistent;
+            if (data != null)
+                MemoryUtil.memCopy(MemoryUtil.memAddress(data), b.vk.address, Math.min(size, data.remaining()));
+        }
+    }
+
+    /** OpenGL's glBufferSubData: later draws see the new data, earlier ones the old. */
+    void write(GLBuffer b, long offset, ByteBuffer data) {
+        if (b == null || b.vk == null || data == null) return;
+        long n = Math.min(data.remaining(), b.vk.size - offset);
+        if (n <= 0) return;
+        synchronized (lock) {
+            if (!inUse(b.vk) && b.vk.lastUse != dev.currentFrame()) {
+                MemoryUtil.memCopy(MemoryUtil.memAddress(data), b.vk.address + offset, n);
+                return;
+            }
+            // Still in use: the new data goes in through a copy on the GPU, in order with the frame's work.
+            long src = stage(MemoryUtil.memAddress(data), n);
+            VkCommandBuffer cmd = dev.cmd();
+            Barriers.full(cmd);
+            try (MemoryStack stack = stackPush()) {
+                VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
+                region.get(0)
+                    .srcOffset(src)
+                    .dstOffset(offset)
+                    .size(n);
+                vkCmdCopyBuffer(cmd, staging.buffer, b.vk.buffer, region);
+            }
+            Barriers.full(cmd);
+            b.vk.lastUse = dev.currentFrame();
+        }
+    }
+
+    void copy(GLBuffer from, GLBuffer to, long readOffset, long writeOffset, long size) {
+        if (from == null || to == null || from.vk == null || to.vk == null || size <= 0) return;
+        synchronized (lock) {
+            VkCommandBuffer cmd = dev.cmd();
+            Barriers.full(cmd);
+            try (MemoryStack stack = stackPush()) {
+                VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
+                region.get(0)
+                    .srcOffset(readOffset)
+                    .dstOffset(writeOffset)
+                    .size(size);
+                vkCmdCopyBuffer(cmd, from.vk.buffer, to.vk.buffer, region);
+            }
+            Barriers.full(cmd);
+            from.vk.lastUse = to.vk.lastUse = dev.currentFrame();
+        }
+    }
+
+    /**
+     * Copies bytes into this frame's staging memory and returns their offset in {@link #staging}. Each frame slot has
+     * its own block, reused only after that slot's previous frame has finished on the GPU.
+     */
+    long stage(long address, long n) {
+        dev.cmd(); // starts the frame, which waits for this slot's previous frame
+        long aligned = (n + 255) & ~255L;
+        long frame = dev.currentFrame();
+        int s = (int) (frame % VulkanDevice.FRAMES_IN_FLIGHT);
+        if (stagingFrame[s] != frame) {
+            stagingFrame[s] = frame;
+            stagingUsed[s] = 0;
+        }
+        VulkanBuffer buf = stagingBlocks[s];
+        if (buf == null || stagingUsed[s] + aligned > buf.size) {
+            // Commands of this frame may still point into the old block; it is freed once the frame is done.
+            if (buf != null) buf.release(dev);
+            buf = new VulkanBuffer(dev, Math.max(64L << 20, aligned * 2));
+            stagingBlocks[s] = buf;
+            stagingUsed[s] = 0;
+        }
+        long at = stagingUsed[s];
+        MemoryUtil.memCopy(address, buf.address + at, n);
+        stagingUsed[s] += aligned;
+        staging = buf;
+        return at;
+    }
+
+    // ------------------------------------------------------------------ textures
+
+    GLTexture texture(int id) {
+        GLTexture t = textures.get(id);
+        if (t == null && id != 0) {
+            t = new GLTexture(id);
+            textures.put(id, t);
+        }
+        return t;
+    }
+
+    GLTexture boundTexture() {
+        return textures.get(boundTextures[activeUnit]);
+    }
+
+    /** Makes sure the texture has an image of this size and format, with room for its mip levels. */
+    void define(GLTexture t, int internal, int width, int height, int levels) {
+        int format = Formats.vulkan(internal, dev.depthFormat());
+        boolean depth = Formats.isDepth(internal);
+        VulkanImage img = t.image;
+        if (img != null && img.width == width && img.height == height && img.format == format && img.levels >= levels)
+            return;
+        synchronized (lock) {
+            if (img != null) img.release(dev);
+            t.image = new VulkanImage(dev, width, height, levels, format, depth);
+            t.internal = internal;
+        }
+    }
+
+    static int fullChain(int width, int height, int maxLevel) {
+        int levels = 32 - Integer.numberOfLeadingZeros(Math.max(1, Math.max(width, height)));
+        return Math.max(1, Math.min(levels, maxLevel + 1));
+    }
+
+    /**
+     * Uploads pixels to one level of a texture. The game hands pixels in OpenGL's layouts; they are turned into the
+     * image's byte order while staging.
+     */
+    void upload(GLTexture t, int level, int x, int y, int width, int height, int glFormat, int glType, long pixels) {
+        VulkanImage img = t.image;
+        if (img == null || pixels == 0 || width <= 0 || height <= 0 || img.depth) return;
+        int texel = Formats.texelSize(img.format);
+        int srcTexel = sourceTexelSize(glFormat, glType);
+        int rowLength = unpackRowLength > 0 ? unpackRowLength : width;
+        long srcRow = align((long) rowLength * srcTexel, unpackAlignment);
+        long src = pixels + unpackSkipRows * srcRow + (long) unpackSkipPixels * srcTexel;
+        long n = (long) width * height * texel;
+        synchronized (lock) {
+            ByteBuffer tmp = MemoryUtil.memAlloc((int) n);
+            try {
+                long dst = MemoryUtil.memAddress(tmp);
+                for (int row = 0; row < height; row++) {
+                    convertRow(
+                        src + row * srcRow,
+                        dst + (long) row * width * texel,
+                        width,
+                        glFormat,
+                        glType,
+                        img.format);
+                }
+                long at = stage(dst, n);
+                VkCommandBuffer cmd = dev.cmd();
+                Barriers.full(cmd);
+                try (MemoryStack stack = stackPush()) {
+                    VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
+                    region.get(0)
+                        .bufferOffset(at)
+                        .imageSubresource(
+                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                .mipLevel(level)
+                                .layerCount(1));
+                    region.get(0)
+                        .imageOffset()
+                        .set(x, y, 0);
+                    region.get(0)
+                        .imageExtent()
+                        .set(width, height, 1);
+                    vkCmdCopyBufferToImage(cmd, staging.buffer, img.image, VK_IMAGE_LAYOUT_GENERAL, region);
+                }
+                Barriers.full(cmd);
+            } finally {
+                MemoryUtil.memFree(tmp);
+            }
+        }
+    }
+
+    private static long align(long v, int a) {
+        return a <= 1 ? v : (v + a - 1) / a * a;
+    }
+
+    private static int sourceTexelSize(int glFormat, int glType) {
+        int comps;
+        switch (glFormat) {
+            case Formats.GL_RED:
+            case Formats.GL_ALPHA:
+            case Formats.GL_LUMINANCE:
+                comps = 1;
+                break;
+            case Formats.GL_RG:
+                comps = 2;
+                break;
+            case Formats.GL_RGB:
+                comps = 3;
+                break;
+            default:
+                comps = 4;
+        }
+        switch (glType) {
+            case Formats.GL_UNSIGNED_INT_8_8_8_8:
+            case Formats.GL_UNSIGNED_INT_8_8_8_8_REV:
+                return 4;
+            case Formats.GL_FLOAT:
+                return comps * 4;
+            case Formats.GL_HALF_FLOAT:
+            case Formats.GL_UNSIGNED_SHORT:
+                return comps * 2;
+            default:
+                return comps;
+        }
+    }
+
+    /** One row of pixels from the game's layout to the image's. */
+    private static void convertRow(long src, long dst, int width, int glFormat, int glType, int vkFormat) {
+        if (vkFormat != VK_FORMAT_R8G8B8A8_UNORM && vkFormat != VK_FORMAT_R8G8B8A8_SRGB) {
+            // Other formats are uploaded as given (the game supplies them in matching layouts).
+            MemoryUtil.memCopy(src, dst, (long) width * Formats.texelSize(vkFormat));
+            return;
+        }
+        boolean bgra = glFormat == Formats.GL_BGRA;
+        boolean reversed = glType == Formats.GL_UNSIGNED_INT_8_8_8_8;
+        if (glFormat == Formats.GL_RGBA && !reversed) {
+            MemoryUtil.memCopy(src, dst, width * 4L);
+            return;
+        }
+        for (int i = 0; i < width; i++) {
+            int r, g, b, a;
+            if (glFormat == Formats.GL_RGB) {
+                r = MemoryUtil.memGetByte(src + i * 3L);
+                g = MemoryUtil.memGetByte(src + i * 3L + 1);
+                b = MemoryUtil.memGetByte(src + i * 3L + 2);
+                a = -1;
+            } else if (glFormat == Formats.GL_RED || glFormat == Formats.GL_LUMINANCE) {
+                r = g = b = MemoryUtil.memGetByte(src + i);
+                a = -1;
+            } else if (glFormat == Formats.GL_ALPHA) {
+                r = g = b = -1;
+                a = MemoryUtil.memGetByte(src + i);
+            } else {
+                int p = MemoryUtil.memGetInt(src + i * 4L);
+                if (reversed) p = Integer.reverseBytes(p);
+                int c0 = p & 0xFF, c1 = (p >>> 8) & 0xFF, c2 = (p >>> 16) & 0xFF, c3 = p >>> 24;
+                if (bgra) {
+                    b = c0;
+                    g = c1;
+                    r = c2;
+                } else {
+                    r = c0;
+                    g = c1;
+                    b = c2;
+                }
+                a = c3;
+            }
+            MemoryUtil.memPutInt(dst + i * 4L, (r & 0xFF) | (g & 0xFF) << 8 | (b & 0xFF) << 16 | (a & 0xFF) << 24);
+        }
+    }
+
+    /** Fills the lower mip levels of a texture from level 0, like glGenerateMipmap. */
+    void generateMipmaps(GLTexture t) {
+        VulkanImage img = t.image;
+        if (img == null || img.levels <= 1 || img.depth) return;
+        synchronized (lock) {
+            VkCommandBuffer cmd = dev.cmd();
+            try (MemoryStack stack = stackPush()) {
+                for (int level = 1; level < img.levels; level++) {
+                    Barriers.full(cmd);
+                    final int src = level - 1, dst = level;
+                    VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
+                    blit.get(0)
+                        .srcSubresource(
+                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                .mipLevel(src)
+                                .layerCount(1))
+                        .dstSubresource(
+                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                .mipLevel(dst)
+                                .layerCount(1));
+                    blit.get(0)
+                        .srcOffsets(1)
+                        .set(Math.max(1, img.width >> src), Math.max(1, img.height >> src), 1);
+                    blit.get(0)
+                        .dstOffsets(1)
+                        .set(Math.max(1, img.width >> dst), Math.max(1, img.height >> dst), 1);
+                    vkCmdBlitImage(
+                        cmd,
+                        img.image,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        img.image,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        blit,
+                        VK_FILTER_LINEAR);
+                }
+                Barriers.full(cmd);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ the game's screen image
+
+    /** Keeps the screen image the size of the window. */
+    void ensureScreen() {
+        int[] size = dev.windowPixels();
+        if (screenColor != null && screenColor.width == size[0] && screenColor.height == size[1]) return;
+        synchronized (lock) {
+            if (screenColor != null) screenColor.release(dev);
+            if (screenDepth != null) screenDepth.release(dev);
+            screenColor = new VulkanImage(dev, size[0], size[1], 1, VK_FORMAT_R8G8B8A8_UNORM, false);
+            screenDepth = new VulkanImage(dev, size[0], size[1], 1, dev.depthFormat(), true);
+        }
+    }
+
+    /** Clears whole images (used when nothing is being drawn into them at the moment). */
+    void clearImages(VulkanImage color, VulkanImage depth, boolean clearColor, float[] rgba, boolean clearDepth,
+        float depthValue, boolean clearStencil, int stencil) {
+        synchronized (lock) {
+            VkCommandBuffer cmd = dev.cmd();
+            Barriers.full(cmd);
+            try (MemoryStack stack = stackPush()) {
+                if (clearColor && color != null) {
+                    VkClearColorValue value = VkClearColorValue.calloc(stack);
+                    value.float32(0, rgba[0])
+                        .float32(1, rgba[1])
+                        .float32(2, rgba[2])
+                        .float32(3, rgba[3]);
+                    VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack)
+                        .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                        .levelCount(1)
+                        .layerCount(1);
+                    vkCmdClearColorImage(cmd, color.image, VK_IMAGE_LAYOUT_GENERAL, value, range);
+                }
+                if ((clearDepth || clearStencil) && depth != null) {
+                    VkClearDepthStencilValue value = VkClearDepthStencilValue.calloc(stack)
+                        .depth(depthValue)
+                        .stencil(stencil);
+                    int aspect = (clearDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0)
+                        | (clearStencil && Formats.hasStencil(depth.format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
+                    if (aspect != 0) {
+                        VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack)
+                            .aspectMask(aspect)
+                            .levelCount(1)
+                            .layerCount(1);
+                        vkCmdClearDepthStencilImage(cmd, depth.image, VK_IMAGE_LAYOUT_GENERAL, value, range);
+                    }
+                }
+            }
+            Barriers.full(cmd);
+        }
+    }
+}

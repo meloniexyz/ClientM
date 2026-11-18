@@ -45,7 +45,7 @@ public final class VulkanRenderBackend extends RenderBackend {
     private int nextId = 1;
     private long nextSync = 1;
     private int drawFramebuffer;
-    private float clearR, clearG, clearB;
+    private float clearR, clearG, clearB, clearA;
     private float frameR, frameG, frameB;
     private List<String> extensions = new ArrayList<>();
     private final Map<Integer, Integer> boundBuffers = new HashMap<>();
@@ -83,7 +83,8 @@ public final class VulkanRenderBackend extends RenderBackend {
     @Override
     public void init() {
         advertise();
-        LOG.info("ClientM Vulkan backend started (stage 1: frames are cleared, the game is not drawn yet)");
+        LOG.info(
+            "ClientM Vulkan backend started (stage 2 in progress: textures and buffers are real, drawing is not done yet)");
     }
 
     /**
@@ -152,26 +153,11 @@ public final class VulkanRenderBackend extends RenderBackend {
     }
 
     @Override
-    public boolean handleSwapBuffers() {
-        VulkanDevice d = VulkanGate.device();
-        if (d != null && !isPresentSuppressed()) d.present(frameR, frameG, frameB);
-        return true;
-    }
-
-    @Override
     public void clearColor(float red, float green, float blue, float alpha) {
         clearR = red;
         clearG = green;
         clearB = blue;
-    }
-
-    @Override
-    public void clear(int mask) {
-        if (drawFramebuffer == 0 && (mask & GL_COLOR_BUFFER_BIT) != 0) {
-            frameR = clearR;
-            frameG = clearG;
-            frameB = clearB;
-        }
+        clearA = alpha;
     }
 
     @Override
@@ -384,27 +370,8 @@ public final class VulkanRenderBackend extends RenderBackend {
         return 0;
     }
 
-    @Override
-    public long fenceSync(int condition, int flags) {
-        return nextSync++;
-    }
-
-    @Override
-    public int clientWaitSync(long sync, int flags, long timeout) {
-        return 0x911A; // ALREADY_SIGNALED
-    }
-
     // Optional commands that the base contract refuses unless a backend implements them. Until the GPU work is real,
     // everything counts as finished and visible.
-
-    @Override
-    public void waitSync(long sync, int flags, long timeout) {}
-
-    @Override
-    public int getSynci(long sync, int pname, IntBuffer length) {
-        if (length != null) length.put(length.position(), 1);
-        return 0x9119; // SIGNALED
-    }
 
     @Override
     public void polygonOffsetClamp(float factor, float units, float clamp) {}
@@ -452,11 +419,6 @@ public final class VulkanRenderBackend extends RenderBackend {
         if (buffer != null) sizes.put(buffer, size);
     }
 
-    @Override
-    public void bindBuffer(int target, int buffer) {
-        boundBuffers.put(target, buffer);
-    }
-
     /** Memory for the game to write into; until drawing exists, what is written is simply kept here. */
     private ByteBuffer memory(int target, long length) {
         Integer buffer = boundBuffers.get(target);
@@ -474,20 +436,267 @@ public final class VulkanRenderBackend extends RenderBackend {
     }
 
     @Override
+    public ScreenCapture createScreenCapture(int width, int height) {
+        return null;
+    }
+
+    // ================================================================== stage 2: frames, buffers, textures, syncs
+
+    private float clearDepthValue = 1f;
+    private int clearStencilValue;
+    private int proxyWidth, proxyHeight;
+
+    private volatile GLResources res;
+
+    /** Created once; the loading screen's thread and the main thread both reach it at start-up. */
+    private GLResources res() {
+        GLResources r = res;
+        if (r != null) return r;
+        synchronized (this) {
+            if (res == null) res = new GLResources(VulkanGate.device());
+            return res;
+        }
+    }
+
+    /** Angelica calls this once per game frame, after the game has drawn it: the frame is shown. */
+    @Override
+    public void onFrameEnd() {
+        GLResources r = res();
+        synchronized (r.lock) {
+            r.ensureScreen();
+            r.dev.endFrame(r.screenColor);
+        }
+    }
+
+    /** Forge's loading screen presents from its own thread with a buffer swap. */
+    @Override
+    public boolean handleSwapBuffers() {
+        if (Thread.currentThread() != com.gtnewhorizons.angelica.glsm.GLStateManager.getMainThread()
+            && !isPresentSuppressed()) {
+            onFrameEnd();
+        }
+        return true;
+    }
+
+    @Override
+    public void clearDepth(double depth) {
+        clearDepthValue = (float) depth;
+    }
+
+    @Override
+    public void clearStencil(int s) {
+        clearStencilValue = s;
+    }
+
+    @Override
+    public void clear(int mask) {
+        if (drawFramebuffer != 0) return; // framebuffers come with drawing (next step)
+        GLResources r = res();
+        r.ensureScreen();
+        r.clearImages(
+            r.screenColor,
+            r.screenDepth,
+            (mask & 0x4000) != 0,
+            new float[] { clearR, clearG, clearB, clearA },
+            (mask & 0x100) != 0,
+            clearDepthValue,
+            (mask & 0x400) != 0,
+            clearStencilValue);
+    }
+
+    // ------------------------------------------------------------------ buffers
+
+    @Override
+    public int genBuffers() {
+        int id = nextId();
+        res().buffer(id);
+        return id;
+    }
+
+    @Override
+    public int createBuffers() {
+        return genBuffers();
+    }
+
+    @Override
+    public void deleteBuffers(int buffer) {
+        GLResources r = res();
+        GLResources.GLBuffer b = r.buffers.remove(buffer);
+        if (b != null && b.vk != null) synchronized (r.lock) {
+            b.vk.release(r.dev);
+        }
+        for (int i = 0; i < r.bound.length; i++) if (r.bound[i] == buffer) r.bound[i] = 0;
+    }
+
+    @Override
+    public void deleteBuffers(IntBuffer buffers) {
+        for (int i = buffers.position(); i < buffers.limit(); i++) deleteBuffers(buffers.get(i));
+    }
+
+    @Override
+    public boolean isBuffer(int buffer) {
+        return res().buffers.containsKey(buffer);
+    }
+
+    @Override
+    public void bindBuffer(int target, int buffer) {
+        GLResources r = res();
+        r.bound[GLResources.slot(target)] = buffer;
+        if (buffer != 0) r.buffer(buffer);
+    }
+
+    private static ByteBuffer bytes(java.nio.Buffer data) {
+        if (data == null) return null;
+        if (data instanceof ByteBuffer) return (ByteBuffer) data;
+        int size = data instanceof FloatBuffer || data instanceof IntBuffer ? 4
+            : data instanceof DoubleBuffer ? 8 : data instanceof ShortBuffer ? 2 : 1;
+        return org.lwjgl.system.MemoryUtil
+            .memByteBuffer(org.lwjgl.system.MemoryUtil.memAddress(data), data.remaining() * size);
+    }
+
+    private void data(GLResources.GLBuffer b, long size, java.nio.Buffer data) {
+        ByteBuffer bb = bytes(data);
+        res().allocate(b, data == null ? size : bb.remaining(), bb, false);
+    }
+
+    @Override
+    public void bufferData(int target, long size, int usage) {
+        data(res().bufferAt(target), size, null);
+    }
+
+    @Override
+    public void bufferData(int target, ByteBuffer data, int usage) {
+        data(res().bufferAt(target), 0, data);
+    }
+
+    @Override
+    public void bufferData(int target, FloatBuffer data, int usage) {
+        data(res().bufferAt(target), 0, data);
+    }
+
+    @Override
+    public void bufferData(int target, IntBuffer data, int usage) {
+        data(res().bufferAt(target), 0, data);
+    }
+
+    @Override
+    public void bufferData(int target, ShortBuffer data, int usage) {
+        data(res().bufferAt(target), 0, data);
+    }
+
+    @Override
+    public void bufferData(int target, DoubleBuffer data, int usage) {
+        data(res().bufferAt(target), 0, data);
+    }
+
+    @Override
+    public void bufferData(int target, int[] data, int usage) {
+        IntBuffer copy = org.lwjgl.BufferUtils.createIntBuffer(data.length);
+        copy.put(data)
+            .flip();
+        data(res().bufferAt(target), 0, copy);
+    }
+
+    @Override
+    public void bufferData(int target, float[] data, int usage) {
+        FloatBuffer copy = org.lwjgl.BufferUtils.createFloatBuffer(data.length);
+        copy.put(data)
+            .flip();
+        data(res().bufferAt(target), 0, copy);
+    }
+
+    @Override
+    public void bufferStorage(int target, long size, int flags) {
+        res().allocate(res().bufferAt(target), size, null, true);
+    }
+
+    @Override
+    public void bufferStorage(int target, ByteBuffer data, int flags) {
+        res().allocate(res().bufferAt(target), data.remaining(), data, true);
+    }
+
+    @Override
+    public void namedBufferData(int buffer, long size, int usage) {
+        data(res().buffer(buffer), size, null);
+    }
+
+    @Override
+    public void namedBufferData(int buffer, ByteBuffer data, int usage) {
+        data(res().buffer(buffer), 0, data);
+    }
+
+    @Override
+    public void namedBufferData(int buffer, FloatBuffer data, int usage) {
+        data(res().buffer(buffer), 0, data);
+    }
+
+    @Override
+    public void bufferSubData(int target, long offset, ByteBuffer data) {
+        res().write(res().bufferAt(target), offset, data);
+    }
+
+    @Override
+    public void bufferSubData(int target, long offset, FloatBuffer data) {
+        res().write(res().bufferAt(target), offset, bytes(data));
+    }
+
+    @Override
+    public void bufferSubData(int target, long offset, IntBuffer data) {
+        res().write(res().bufferAt(target), offset, bytes(data));
+    }
+
+    @Override
+    public void bufferSubData(int target, long offset, ShortBuffer data) {
+        res().write(res().bufferAt(target), offset, bytes(data));
+    }
+
+    @Override
+    public void bufferSubData(int target, long offset, DoubleBuffer data) {
+        res().write(res().bufferAt(target), offset, bytes(data));
+    }
+
+    @Override
+    public void namedBufferSubData(int buffer, long offset, ByteBuffer data) {
+        res().write(res().buffer(buffer), offset, data);
+    }
+
+    @Override
+    public void copyBufferSubData(int readTarget, int writeTarget, long readOffset, long writeOffset, long size) {
+        GLResources r = res();
+        r.copy(r.bufferAt(readTarget), r.bufferAt(writeTarget), readOffset, writeOffset, size);
+    }
+
+    /**
+     * Mapping hands out the buffer's memory directly. Unless the game says it does its own syncing (persistent or
+     * unsynchronized mapping), OpenGL waits for the GPU here, and so does this.
+     */
+    private ByteBuffer map(GLResources.GLBuffer b, long offset, long length, int access) {
+        if (b == null) return null;
+        GLResources r = res();
+        if (b.vk == null) r.allocate(b, Math.max(16, offset + length), null, false);
+        boolean invalidate = (access & 0x0004) != 0 || (access & 0x0008) != 0; // INVALIDATE_RANGE / _BUFFER
+        boolean unsynchronized = (access & 0x0020) != 0 || (access & 0x0040) != 0 || b.persistent;
+        if (!unsynchronized && r.inUse(b.vk)) {
+            if (invalidate && (access & 0x0008) != 0) r.allocate(b, b.vk.size, null, false);
+            else r.dev.waitFor(b.vk.lastUse);
+        }
+        return b.vk.view(offset, length);
+    }
+
+    @Override
     public ByteBuffer mapBuffer(int target, int access) {
-        Integer buffer = boundBuffers.get(target);
-        Long size = buffer == null ? null : sizes.get(buffer);
-        return memory(target, size == null ? 16 : size);
+        GLResources.GLBuffer b = res().bufferAt(target);
+        return b == null || b.vk == null ? null : map(b, 0, b.vk.size, 0);
     }
 
     @Override
     public ByteBuffer mapBuffer(int target, int access, long length, ByteBuffer old_buffer) {
-        return memory(target, length);
+        return map(res().bufferAt(target), 0, length, 0);
     }
 
     @Override
     public ByteBuffer mapBufferRange(int target, long offset, long length, int access) {
-        return memory(target, length);
+        return map(res().bufferAt(target), offset, length, access);
     }
 
     @Override
@@ -496,9 +705,435 @@ public final class VulkanRenderBackend extends RenderBackend {
     }
 
     @Override
-    public ScreenCapture createScreenCapture(int width, int height) {
-        return null;
+    public void flushMappedBufferRange(int target, long offset, long length) {}
+
+    private void readBack(int target, long offset, java.nio.Buffer data) {
+        GLResources.GLBuffer b = res().bufferAt(target);
+        if (b == null || b.vk == null) return;
+        if (b.vk.lastUse != 0) res().dev.waitFor(b.vk.lastUse);
+        ByteBuffer out = bytes(data);
+        long n = Math.min(out.remaining(), b.vk.size - offset);
+        org.lwjgl.system.MemoryUtil.memCopy(b.vk.address + offset, org.lwjgl.system.MemoryUtil.memAddress(out), n);
     }
+
+    @Override
+    public void getBufferSubData(int target, long offset, ByteBuffer data) {
+        readBack(target, offset, data);
+    }
+
+    @Override
+    public void getBufferSubData(int target, long offset, FloatBuffer data) {
+        readBack(target, offset, data);
+    }
+
+    @Override
+    public void getBufferSubData(int target, long offset, IntBuffer data) {
+        readBack(target, offset, data);
+    }
+
+    @Override
+    public void getBufferSubData(int target, long offset, ShortBuffer data) {
+        readBack(target, offset, data);
+    }
+
+    @Override
+    public void getBufferSubData(int target, long offset, DoubleBuffer data) {
+        readBack(target, offset, data);
+    }
+
+    @Override
+    public int getBufferParameteri(int target, int pname) {
+        GLResources.GLBuffer b = res().bufferAt(target);
+        if (pname == 0x8764) return b == null || b.vk == null ? 0 : (int) b.vk.size; // BUFFER_SIZE
+        return 0;
+    }
+
+    // ------------------------------------------------------------------ textures
+
+    @Override
+    public int genTextures() {
+        int id = nextId();
+        res().texture(id);
+        return id;
+    }
+
+    @Override
+    public void genTextures(IntBuffer textures) {
+        for (int i = textures.position(); i < textures.limit(); i++) textures.put(i, genTextures());
+    }
+
+    @Override
+    public int createTextures(int target) {
+        return genTextures();
+    }
+
+    @Override
+    public void deleteTextures(int texture) {
+        GLResources r = res();
+        GLResources.GLTexture t = r.textures.remove(texture);
+        if (t != null && t.image != null) synchronized (r.lock) {
+            t.image.release(r.dev);
+        }
+        for (int i = 0; i < r.boundTextures.length; i++) if (r.boundTextures[i] == texture) r.boundTextures[i] = 0;
+    }
+
+    @Override
+    public boolean isTexture(int texture) {
+        return res().textures.containsKey(texture);
+    }
+
+    @Override
+    public void activeTexture(int texture) {
+        res().activeUnit = Math.max(0, Math.min(GLResources.UNITS - 1, texture - 0x84C0));
+    }
+
+    @Override
+    public void bindTexture(int target, int texture) {
+        GLResources r = res();
+        r.boundTextures[r.activeUnit] = texture;
+        if (texture != 0) r.texture(texture);
+    }
+
+    @Override
+    public void bindTextureUnit(int unit, int texture) {
+        GLResources r = res();
+        if (unit >= 0 && unit < GLResources.UNITS) r.boundTextures[unit] = texture;
+        if (texture != 0) r.texture(texture);
+    }
+
+    @Override
+    public void pixelStorei(int pname, int param) {
+        GLResources r = res();
+        switch (pname) {
+            case 0x0CF2:
+                r.unpackRowLength = param;
+                break;
+            case 0x0CF3:
+                r.unpackSkipRows = param;
+                break;
+            case 0x0CF4:
+                r.unpackSkipPixels = param;
+                break;
+            case 0x0CF5:
+                r.unpackAlignment = param;
+                break;
+            default:
+                break;
+        }
+    }
+
+    private static final int GL_TEXTURE_2D = 0x0DE1, GL_PROXY_TEXTURE_2D = 0x8064;
+
+    private void image2D(GLResources.GLTexture t, int target, int level, int internal, int width, int height,
+        int format, int type, long pixels) {
+        if (target == GL_PROXY_TEXTURE_2D) {
+            proxyWidth = width;
+            proxyHeight = height;
+            return;
+        }
+        if (t == null || target != GL_TEXTURE_2D) return;
+        GLResources r = res();
+        if (level == 0) {
+            r.define(t, internal, width, height, GLResources.fullChain(width, height, t.maxLevel));
+        } else if (t.image == null) {
+            r.define(t, internal, width << level, height << level, level + 1);
+        }
+        if (pixels != 0) r.upload(t, level, 0, 0, width, height, format, type, pixels);
+    }
+
+    private long unpackAddress(long offset) {
+        GLResources.GLBuffer pbo = res().bufferAt(0x88EC);
+        return pbo == null || pbo.vk == null ? 0 : pbo.vk.address + offset;
+    }
+
+    private static long address(java.nio.Buffer b) {
+        return b == null ? 0 : org.lwjgl.system.MemoryUtil.memAddress(b);
+    }
+
+    @Override
+    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
+        int type, ByteBuffer pixels) {
+        image2D(res().boundTexture(), target, level, internalFormat, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
+        int type, IntBuffer pixels) {
+        image2D(res().boundTexture(), target, level, internalFormat, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
+        int type, FloatBuffer pixels) {
+        image2D(res().boundTexture(), target, level, internalFormat, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
+        int type, DoubleBuffer pixels) {
+        image2D(res().boundTexture(), target, level, internalFormat, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
+        int type, long pixelBufferOffset) {
+        image2D(
+            res().boundTexture(),
+            target,
+            level,
+            internalFormat,
+            width,
+            height,
+            format,
+            type,
+            unpackAddress(pixelBufferOffset));
+    }
+
+    @Override
+    public void textureImage2DEXT(int texture, int target, int level, int internalformat, int width, int height,
+        int border, int format, int type, ByteBuffer pixels) {
+        image2D(res().texture(texture), target, level, internalformat, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void textureImage2DEXT(int texture, int target, int level, int internalformat, int width, int height,
+        int border, int format, int type, IntBuffer pixels) {
+        image2D(res().texture(texture), target, level, internalformat, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void texStorage2D(int target, int levels, int internalFormat, int width, int height) {
+        GLResources.GLTexture t = res().boundTexture();
+        if (t != null && target == GL_TEXTURE_2D) res().define(t, internalFormat, width, height, levels);
+    }
+
+    private void subImage(GLResources.GLTexture t, int level, int x, int y, int w, int h, int format, int type,
+        long pixels) {
+        if (t != null && pixels != 0) res().upload(t, level, x, y, w, h, format, type, pixels);
+    }
+
+    @Override
+    public void texSubImage2D(int target, int level, int xoffset, int yoffset, int width, int height, int format,
+        int type, ByteBuffer pixels) {
+        subImage(res().boundTexture(), level, xoffset, yoffset, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void texSubImage2D(int target, int level, int xoffset, int yoffset, int width, int height, int format,
+        int type, IntBuffer pixels) {
+        subImage(res().boundTexture(), level, xoffset, yoffset, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void textureSubImage2D(int texture, int level, int xoffset, int yoffset, int width, int height, int format,
+        int type, ByteBuffer pixels) {
+        subImage(res().texture(texture), level, xoffset, yoffset, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void textureSubImage2D(int texture, int level, int xoffset, int yoffset, int width, int height, int format,
+        int type, IntBuffer pixels) {
+        subImage(res().texture(texture), level, xoffset, yoffset, width, height, format, type, address(pixels));
+    }
+
+    @Override
+    public void generateMipmap(int target) {
+        GLResources.GLTexture t = res().boundTexture();
+        if (t != null) res().generateMipmaps(t);
+    }
+
+    @Override
+    public void generateTextureMipmap(int texture) {
+        GLResources.GLTexture t = res().texture(texture);
+        if (t != null) res().generateMipmaps(t);
+    }
+
+    private static void parameter(GLResources.GLTexture t, int pname, float value) {
+        if (t == null) return;
+        int v = (int) value;
+        switch (pname) {
+            case 0x2801:
+                t.minFilter = v;
+                break;
+            case 0x2800:
+                t.magFilter = v;
+                break;
+            case 0x2802:
+                t.wrapS = v;
+                break;
+            case 0x2803:
+                t.wrapT = v;
+                break;
+            case 0x813D:
+                t.maxLevel = v;
+                break;
+            case 0x813A:
+                t.minLod = value;
+                break;
+            case 0x813B:
+                t.maxLod = value;
+                break;
+            case 0x8501:
+                t.lodBias = value;
+                break;
+            case 0x84FE:
+                t.anisotropy = value;
+                break;
+            case 0x884C:
+                t.compareMode = v;
+                break;
+            case 0x884D:
+                t.compareFunc = v;
+                break;
+            default:
+                return;
+        }
+        t.samplerVersion++;
+    }
+
+    private static float parameterValue(GLResources.GLTexture t, int pname) {
+        if (t == null) return 0;
+        switch (pname) {
+            case 0x2801:
+                return t.minFilter;
+            case 0x2800:
+                return t.magFilter;
+            case 0x2802:
+                return t.wrapS;
+            case 0x2803:
+                return t.wrapT;
+            case 0x813D:
+                return t.maxLevel;
+            case 0x813A:
+                return t.minLod;
+            case 0x813B:
+                return t.maxLod;
+            case 0x8501:
+                return t.lodBias;
+            case 0x84FE:
+                return t.anisotropy;
+            case 0x884C:
+                return t.compareMode;
+            case 0x884D:
+                return t.compareFunc;
+            default:
+                return 0;
+        }
+    }
+
+    @Override
+    public void texParameteri(int target, int pname, int param) {
+        parameter(res().boundTexture(), pname, param);
+    }
+
+    @Override
+    public void texParameterf(int target, int pname, float param) {
+        parameter(res().boundTexture(), pname, param);
+    }
+
+    @Override
+    public void texParameteriv(int target, int pname, IntBuffer params) {
+        parameter(res().boundTexture(), pname, params.get(params.position()));
+    }
+
+    @Override
+    public void texParameterfv(int target, int pname, FloatBuffer params) {
+        parameter(res().boundTexture(), pname, params.get(params.position()));
+    }
+
+    @Override
+    public void textureParameteri(int texture, int target, int pname, int param) {
+        parameter(res().texture(texture), pname, param);
+    }
+
+    @Override
+    public void textureParameterf(int texture, int target, int pname, float param) {
+        parameter(res().texture(texture), pname, param);
+    }
+
+    @Override
+    public void textureParameteriv(int texture, int target, int pname, IntBuffer params) {
+        parameter(res().texture(texture), pname, params.get(params.position()));
+    }
+
+    @Override
+    public int getTexParameteri(int target, int pname) {
+        return (int) parameterValue(res().boundTexture(), pname);
+    }
+
+    @Override
+    public float getTexParameterf(int target, int pname) {
+        return parameterValue(res().boundTexture(), pname);
+    }
+
+    @Override
+    public int getTextureParameteri(int texture, int target, int pname) {
+        return (int) parameterValue(res().texture(texture), pname);
+    }
+
+    @Override
+    public float getTextureParameterf(int texture, int target, int pname) {
+        return parameterValue(res().texture(texture), pname);
+    }
+
+    private int levelParameter(GLResources.GLTexture t, int target, int level, int pname) {
+        if (target == GL_PROXY_TEXTURE_2D) {
+            return pname == 0x1000 ? proxyWidth : pname == 0x1001 ? proxyHeight : 0;
+        }
+        if (t == null || t.image == null) return 0;
+        switch (pname) {
+            case 0x1000:
+                return Math.max(1, t.image.width >> level);
+            case 0x1001:
+                return Math.max(1, t.image.height >> level);
+            case 0x1003:
+                return t.internal;
+            default:
+                return 0;
+        }
+    }
+
+    @Override
+    public int getTexLevelParameteri(int target, int level, int pname) {
+        return levelParameter(res().boundTexture(), target, level, pname);
+    }
+
+    @Override
+    public int getTextureLevelParameteri(int texture, int level, int pname) {
+        return levelParameter(res().texture(texture), GL_TEXTURE_2D, level, pname);
+    }
+
+    // ------------------------------------------------------------------ sync objects
+
+    /** A sync object is the number of the frame it was made in; it is signalled once that frame is done on the GPU. */
+    @Override
+    public long fenceSync(int condition, int flags) {
+        return res().dev.currentFrame();
+    }
+
+    @Override
+    public int clientWaitSync(long sync, int flags, long timeout) {
+        VulkanDevice d = res().dev;
+        if (d.isDone(sync)) return 0x911A; // ALREADY_SIGNALED
+        if (timeout == 0) return 0x911B; // TIMEOUT_EXPIRED
+        // A frame still being recorded cannot finish before it is submitted; OpenGL would flush here, and the
+        // streaming code that waits only ever waits for older frames.
+        if (sync >= d.currentFrame()) return 0x911C;
+        d.waitFor(sync);
+        return 0x911C; // CONDITION_SATISFIED
+    }
+
+    @Override
+    public int getSynci(long sync, int pname, IntBuffer length) {
+        if (length != null) length.put(length.position(), 1);
+        return res().dev.isDone(sync) ? 0x9119 : 0x9118; // SIGNALED / UNSIGNALED
+    }
+
+    @Override
+    public void deleteSync(long sync) {}
+
+    @Override
+    public void waitSync(long sync, int flags, long timeout) {}
 
     // ------------------------------------------------------------------ not drawn yet (generated)
 
@@ -587,12 +1222,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void scissor(int x, int y, int width, int height) {}
 
     @Override
-    public void clearDepth(double depth) {}
-
-    @Override
-    public void clearStencil(int s) {}
-
-    @Override
     public void lineWidth(float width) {}
 
     @Override
@@ -612,9 +1241,6 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     public void multiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride) {}
-
-    @Override
-    public void copyBufferSubData(int readTarget, int writeTarget, long readOffset, long writeOffset, long size) {}
 
     @Override
     public void drawElementsInstanced(int mode, int count, int type, long indices, int primcount) {}
@@ -651,88 +1277,8 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void dispatchComputeIndirect(long offset) {}
 
     @Override
-    public int genTextures() {
-        return nextId();
-    }
-
-    @Override
-    public void genTextures(IntBuffer textures) {
-        while (textures.hasRemaining()) textures.put(nextId());
-    }
-
-    @Override
-    public void deleteTextures(int texture) {}
-
-    @Override
-    public void bindTexture(int target, int texture) {}
-
-    @Override
-    public void activeTexture(int texture) {}
-
-    @Override
-    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
-        int type, ByteBuffer pixels) {}
-
-    @Override
-    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
-        int type, DoubleBuffer pixels) {}
-
-    @Override
-    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
-        int type, FloatBuffer pixels) {}
-
-    @Override
-    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
-        int type, IntBuffer pixels) {}
-
-    @Override
-    public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format,
-        int type, long pixelBufferOffset) {}
-
-    @Override
-    public void texSubImage2D(int target, int level, int xoffset, int yoffset, int width, int height, int format,
-        int type, ByteBuffer pixels) {}
-
-    @Override
-    public void texSubImage2D(int target, int level, int xoffset, int yoffset, int width, int height, int format,
-        int type, IntBuffer pixels) {}
-
-    @Override
     public void copyTexSubImage2D(int target, int level, int xoffset, int yoffset, int x, int y, int width,
         int height) {}
-
-    @Override
-    public void texParameteri(int target, int pname, int param) {}
-
-    @Override
-    public void texParameterf(int target, int pname, float param) {}
-
-    @Override
-    public void texParameteriv(int target, int pname, IntBuffer params) {}
-
-    @Override
-    public void texParameterfv(int target, int pname, FloatBuffer params) {}
-
-    @Override
-    public int getTexParameteri(int target, int pname) {
-        return 0;
-    }
-
-    @Override
-    public float getTexParameterf(int target, int pname) {
-        return 0;
-    }
-
-    @Override
-    public int getTexLevelParameteri(int target, int level, int pname) {
-        return 0;
-    }
-
-    @Override
-    public void generateMipmap(int target) {}
-
-    @Override
-    public void pixelStorei(int pname, int param) {}
 
     @Override
     public int genSamplers() {
@@ -955,17 +1501,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void vertexAttrib4f(int index, float v0, float v1, float v2, float v3) {}
 
     @Override
-    public int genBuffers() {
-        return nextId();
-    }
-
-    @Override
-    public void deleteBuffers(int buffer) {}
-
-    @Override
-    public void deleteBuffers(IntBuffer buffers) {}
-
-    @Override
     public void bindBufferBase(int target, int index, int buffer) {}
 
     @Override
@@ -977,54 +1512,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     @Override
     public int getIndexedBufferBinding(int target, int index) {
         return 0;
-    }
-
-    @Override
-    public void bufferSubData(int target, long offset, ByteBuffer data) {}
-
-    @Override
-    public void bufferSubData(int target, long offset, ShortBuffer data) {}
-
-    @Override
-    public void bufferSubData(int target, long offset, IntBuffer data) {}
-
-    @Override
-    public void bufferSubData(int target, long offset, FloatBuffer data) {}
-
-    @Override
-    public void bufferSubData(int target, long offset, DoubleBuffer data) {}
-
-    @Override
-    public void getBufferSubData(int target, long offset, ByteBuffer data) {}
-
-    @Override
-    public void getBufferSubData(int target, long offset, ShortBuffer data) {}
-
-    @Override
-    public void getBufferSubData(int target, long offset, IntBuffer data) {}
-
-    @Override
-    public void getBufferSubData(int target, long offset, FloatBuffer data) {}
-
-    @Override
-    public void getBufferSubData(int target, long offset, DoubleBuffer data) {}
-
-    @Override
-    public int getBufferParameteri(int target, int pname) {
-        return 0;
-    }
-
-    @Override
-    public boolean isBuffer(int buffer) {
-        return true;
-    }
-
-    @Override
-    public void flushMappedBufferRange(int target, long offset, long length) {}
-
-    @Override
-    public boolean isTexture(int texture) {
-        return true;
     }
 
     @Override
@@ -1091,45 +1578,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void vertexAttribBinding(int attribindex, int bindingindex) {}
 
     @Override
-    public int createTextures(int target) {
-        return nextId();
-    }
-
-    @Override
-    public void bindTextureUnit(int unit, int texture) {}
-
-    @Override
-    public void textureParameteri(int texture, int target, int pname, int param) {}
-
-    @Override
-    public void textureParameterf(int texture, int target, int pname, float param) {}
-
-    @Override
-    public void textureParameteriv(int texture, int target, int pname, IntBuffer params) {}
-
-    @Override
-    public void texStorage2D(int target, int levels, int internalFormat, int width, int height) {}
-
-    @Override
-    public void generateTextureMipmap(int texture) {}
-
-    @Override
-    public void textureImage2DEXT(int texture, int target, int level, int internalformat, int width, int height,
-        int border, int format, int type, ByteBuffer pixels) {}
-
-    @Override
-    public void textureImage2DEXT(int texture, int target, int level, int internalformat, int width, int height,
-        int border, int format, int type, IntBuffer pixels) {}
-
-    @Override
-    public void textureSubImage2D(int texture, int level, int xoffset, int yoffset, int width, int height, int format,
-        int type, ByteBuffer pixels) {}
-
-    @Override
-    public void textureSubImage2D(int texture, int level, int xoffset, int yoffset, int width, int height, int format,
-        int type, IntBuffer pixels) {}
-
-    @Override
     public int createFramebuffers() {
         return nextId();
     }
@@ -1148,34 +1596,8 @@ public final class VulkanRenderBackend extends RenderBackend {
         int srcY1, int dstX0, int dstY0, int dstX1, int dstY1, int mask, int filter) {}
 
     @Override
-    public int createBuffers() {
-        return nextId();
-    }
-
-    @Override
-    public void namedBufferSubData(int buffer, long offset, ByteBuffer data) {}
-
-    @Override
     public void copyTextureSubImage2D(int texture, int target, int level, int xoffset, int yoffset, int x, int y,
         int width, int height) {}
-
-    @Override
-    public int getTextureParameteri(int texture, int target, int pname) {
-        return 0;
-    }
-
-    @Override
-    public float getTextureParameterf(int texture, int target, int pname) {
-        return 0;
-    }
-
-    @Override
-    public int getTextureLevelParameteri(int texture, int level, int pname) {
-        return 0;
-    }
-
-    @Override
-    public void deleteSync(long sync) {}
 
     @Override
     public void clearBufferSubData(int target, int internalFormat, long offset, long size, int format, int type,
@@ -1198,66 +1620,4 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void copyImageSubData(int srcName, int srcTarget, int srcLevel, int srcX, int srcY, int srcZ, int dstName,
         int dstTarget, int dstLevel, int dstX, int dstY, int dstZ, int srcWidth, int srcHeight, int srcDepth) {}
 
-    @Override
-    public void bufferData(int target, long size, int usage) {
-        sizeBound(target, size);
-    }
-
-    @Override
-    public void bufferData(int target, ByteBuffer data, int usage) {
-        sizeBound(target, data == null ? 0 : data.remaining());
-    }
-
-    @Override
-    public void bufferData(int target, FloatBuffer data, int usage) {}
-
-    @Override
-    public void bufferData(int target, ShortBuffer data, int usage) {}
-
-    @Override
-    public void bufferData(int target, IntBuffer data, int usage) {}
-
-    @Override
-    public void bufferData(int target, DoubleBuffer data, int usage) {}
-
-    @Override
-    public void bufferData(int target, int[] data, int usage) {}
-
-    @Override
-    public void bufferData(int target, float[] data, int usage) {}
-
-    @Override
-    public void bufferStorage(int target, ByteBuffer data, int flags) {
-        sizeBound(target, data == null ? 0 : data.remaining());
-    }
-
-    @Override
-    public void bufferStorage(int target, long size, int flags) {
-        sizeBound(target, size);
-    }
-
-    @Override
-    public void namedBufferData(int buffer, long size, int usage) {
-        sizes.put(buffer, size);
-    }
-
-    @Override
-    public void namedBufferData(int buffer, ByteBuffer data, int usage) {
-        sizes.put(
-            buffer,
-            data == null ? 0L
-                : (long) data.remaining() * (data.getClass()
-                    .getSimpleName()
-                    .contains("Float") ? 4 : 1));
-    }
-
-    @Override
-    public void namedBufferData(int buffer, FloatBuffer data, int usage) {
-        sizes.put(
-            buffer,
-            data == null ? 0L
-                : (long) data.remaining() * (data.getClass()
-                    .getSimpleName()
-                    .contains("Float") ? 4 : 1));
-    }
 }
