@@ -27,6 +27,7 @@
     "MixinGuiScreenResourcePacks_Folders",
     "AccessorRepositoryEntry",
     "MixinSkyRenderer_Toggle",
+    "MixinForgeHooksClient_VulkanDisplay",
     "MixinSplashProgress_Theme",
     "MixinSplashProgressThread_Theme",
     "MixinSplashFontRenderer_Theme",

@@ -29,3 +29,31 @@ tasks.withType<JavaExec>().matching { it.name.startsWith("runClient") }.configur
     val extra = System.getenv("CLIENTM_JVM_ARGS")?.trim()?.split(" ") ?: if (modernJava) tunedFlags else null
     extra?.let { jvmArgs(it) }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Experimental Vulkan renderer (src/vulkan). It plugs into Angelica as one more render backend. It is compiled on its
+// own because it needs LWJGL 3 (Vulkan, SDL), whose package names clash with the LWJGL 2 the rest of the mod builds
+// against. The main code only reaches it by class name, so the mod still loads where LWJGL 3 / Vulkan are missing.
+// Sources live in src/vulkan/java and src/vulkan/resources (the defaults for a source set named "vulkan").
+val vulkan: SourceSet by sourceSets.creating
+
+dependencies {
+    "vulkanCompileOnly"("com.github.GTNewHorizons:Angelica:2.2.46:dev") { isTransitive = false }
+    "vulkanCompileOnly"("com.github.GTNewHorizons:lwjgl3ify:3.0.33:dev") { isTransitive = false }
+    "vulkanCompileOnly"("org.lwjgl:lwjgl:3.4.2")
+    "vulkanCompileOnly"("org.lwjgl:lwjgl-vulkan:3.4.2")
+    "vulkanCompileOnly"("org.lwjgl:lwjgl-sdl:3.4.2")
+    "vulkanCompileOnly"("org.apache.logging.log4j:log4j-api:2.0-beta9")
+    // Vulkan's Java bindings for the Java 21/25 dev launches; on Windows they use the system's vulkan-1.dll.
+    "lwjgl3Classpath"("org.lwjgl:lwjgl-vulkan:3.4.2")
+    runtimeOnly(vulkan.output)
+}
+
+tasks.named<JavaCompile>("compileVulkanJava") {
+    options.release.set(8)
+    options.encoding = "UTF-8"
+}
+
+tasks.named<Jar>("jar") {
+    from(vulkan.output)
+}
