@@ -158,11 +158,6 @@ public final class VulkanRenderBackend extends RenderBackend {
         res().ctx().clearA = alpha;
     }
 
-    @Override
-    public void bindFramebuffer(int target, int framebuffer) {
-        if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) res().ctx().drawFramebuffer = framebuffer;
-    }
-
     // ------------------------------------------------------------------ questions the game asks
 
     @Override
@@ -286,11 +281,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     @Override
     public int getError() {
         return 0;
-    }
-
-    @Override
-    public int checkFramebufferStatus(int target) {
-        return 0x8CD5; // FRAMEBUFFER_COMPLETE
     }
 
     @Override
@@ -427,7 +417,10 @@ public final class VulkanRenderBackend extends RenderBackend {
         GLResources r = res();
         synchronized (r.lock) {
             r.ensureScreen();
+            VulkanRenderer v = rnd();
+            v.captureBeforePresent();
             r.dev.endFrame(r.screenColor);
+            v.captureAfterPresent();
         }
     }
 
@@ -449,22 +442,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     @Override
     public void clearStencil(int s) {
         res().ctx().clearStencil = s;
-    }
-
-    @Override
-    public void clear(int mask) {
-        if (res().ctx().drawFramebuffer != 0) return; // framebuffers come with drawing (next step)
-        GLResources r = res();
-        r.ensureScreen();
-        r.clearImages(
-            r.screenColor,
-            r.screenDepth,
-            (mask & 0x4000) != 0,
-            new float[] { res().ctx().clearR, res().ctx().clearG, res().ctx().clearB, res().ctx().clearA },
-            (mask & 0x100) != 0,
-            res().ctx().clearDepth,
-            (mask & 0x400) != 0,
-            res().ctx().clearStencil);
     }
 
     // ------------------------------------------------------------------ buffers
@@ -499,13 +476,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     @Override
     public boolean isBuffer(int buffer) {
         return res().buffers.containsKey(buffer);
-    }
-
-    @Override
-    public void bindBuffer(int target, int buffer) {
-        GLResources r = res();
-        r.ctx().bound[GLResources.slot(target)] = buffer;
-        if (buffer != 0) r.buffer(buffer);
     }
 
     private static ByteBuffer bytes(java.nio.Buffer data) {
@@ -1440,7 +1410,39 @@ public final class VulkanRenderBackend extends RenderBackend {
         ufb(location, value, 4, 4);
     }
 
-    // ------------------------------------------------------------------ not drawn yet (generated)
+    // ================================================================== stage 2: state, vertex arrays, framebuffers,
+    // draws
+
+    private volatile VulkanRenderer rendererStore;
+
+    private VulkanRenderer rnd() {
+        VulkanRenderer v = rendererStore;
+        if (v != null) return v;
+        synchronized (this) {
+            if (rendererStore == null) {
+                GLResources r = res();
+                VulkanRenderer created = new VulkanRenderer(r.dev, r, sh());
+                Barriers.outsideRendering = created::endRendering;
+                r.dev.beforeSubmit = created::endRendering;
+                rendererStore = created;
+            }
+            return rendererStore;
+        }
+    }
+
+    private RenderState st() {
+        return res().ctx().state;
+    }
+
+    private VulkanRenderer.VertexArray vao() {
+        GLResources.Ctx c = res().ctx();
+        VulkanRenderer.VertexArray v = rnd().vaos.get(c.vao);
+        if (v == null) {
+            v = new VulkanRenderer.VertexArray();
+            rnd().vaos.put(c.vao, v);
+        }
+        return v;
+    }
 
     @Override
     public void flush() {}
@@ -1449,85 +1451,166 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void finish() {}
 
     @Override
-    public void enable(int cap) {}
+    public void enable(int cap) {
+        st().set(cap, true);
+    }
 
     @Override
-    public void enablei(int cap, int index) {}
+    public void enablei(int cap, int index) {
+        st().set(cap, true);
+    }
 
     @Override
-    public void disable(int cap) {}
+    public void disable(int cap) {
+        st().set(cap, false);
+    }
 
     @Override
-    public void disablei(int cap, int index) {}
+    public void disablei(int cap, int index) {
+        st().set(cap, false);
+    }
 
     @Override
-    public void blendFuncSeparatei(int buf, int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) {}
+    public void blendFuncSeparatei(int buf, int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) {
+        blendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha);
+    }
 
     @Override
-    public void blendFunc(int sfactor, int dfactor) {}
+    public void blendFunc(int sfactor, int dfactor) {
+        blendFuncSeparate(sfactor, dfactor, sfactor, dfactor);
+    }
 
     @Override
-    public void blendFuncSeparate(int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) {}
+    public void blendFuncSeparate(int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) {
+        RenderState s = st();
+        s.srcRGB = srcRGB;
+        s.dstRGB = dstRGB;
+        s.srcAlpha = srcAlpha;
+        s.dstAlpha = dstAlpha;
+    }
 
     @Override
-    public void blendEquation(int mode) {}
+    public void blendEquation(int mode) {
+        blendEquationSeparate(mode, mode);
+    }
 
     @Override
-    public void blendEquationSeparate(int modeRGB, int modeAlpha) {}
+    public void blendEquationSeparate(int modeRGB, int modeAlpha) {
+        RenderState s = st();
+        s.eqRGB = modeRGB;
+        s.eqAlpha = modeAlpha;
+    }
 
     @Override
-    public void blendColor(float red, float green, float blue, float alpha) {}
+    public void blendColor(float red, float green, float blue, float alpha) {
+        float[] c = st().blendColor;
+        c[0] = red;
+        c[1] = green;
+        c[2] = blue;
+        c[3] = alpha;
+    }
 
     @Override
-    public void depthFunc(int func) {}
+    public void depthFunc(int func) {
+        st().depthFunc = func;
+    }
 
     @Override
-    public void depthMask(boolean flag) {}
+    public void depthMask(boolean flag) {
+        st().depthMask = flag;
+    }
 
     @Override
-    public void colorMask(boolean red, boolean green, boolean blue, boolean alpha) {}
+    public void colorMask(boolean red, boolean green, boolean blue, boolean alpha) {
+        boolean[] m = st().colorMask;
+        m[0] = red;
+        m[1] = green;
+        m[2] = blue;
+        m[3] = alpha;
+    }
 
     @Override
-    public void cullFace(int mode) {}
+    public void cullFace(int mode) {
+        st().cullMode = mode;
+    }
 
     @Override
-    public void frontFace(int mode) {}
+    public void frontFace(int mode) {
+        st().frontFace = mode;
+    }
 
     @Override
-    public void polygonMode(int face, int mode) {}
+    public void polygonMode(int face, int mode) {
+        st().polygonMode = mode;
+    }
 
     @Override
-    public void polygonOffset(float factor, float units) {}
+    public void polygonOffset(float factor, float units) {
+        st().offsetFactor = factor;
+        st().offsetUnits = units;
+    }
 
     @Override
-    public void stencilFunc(int func, int ref, int mask) {}
+    public void stencilFunc(int func, int ref, int mask) {
+        RenderState s = st();
+        s.stencilFunc = func;
+        s.stencilRef = ref;
+        s.stencilValueMask = mask;
+    }
 
     @Override
-    public void stencilOp(int sfail, int dpfail, int dppass) {}
+    public void stencilOp(int sfail, int dpfail, int dppass) {
+        RenderState s = st();
+        s.stencilFail = sfail;
+        s.stencilDepthFail = dpfail;
+        s.stencilPass = dppass;
+    }
 
     @Override
-    public void stencilMask(int mask) {}
+    public void stencilMask(int mask) {
+        st().stencilWriteMask = mask;
+    }
 
     @Override
-    public void stencilFuncSeparate(int face, int func, int ref, int mask) {}
+    public void stencilFuncSeparate(int face, int func, int ref, int mask) {
+        stencilFunc(func, ref, mask);
+    }
 
     @Override
-    public void stencilOpSeparate(int face, int sfail, int dpfail, int dppass) {}
+    public void stencilOpSeparate(int face, int sfail, int dpfail, int dppass) {
+        stencilOp(sfail, dpfail, dppass);
+    }
 
     @Override
-    public void stencilMaskSeparate(int face, int mask) {}
+    public void stencilMaskSeparate(int face, int mask) {
+        stencilMask(mask);
+    }
 
     @Override
-    public void viewport(int x, int y, int width, int height) {}
+    public void viewport(int x, int y, int width, int height) {
+        int[] v = st().viewport;
+        v[0] = x;
+        v[1] = y;
+        v[2] = width;
+        v[3] = height;
+    }
 
     @Override
     public void depthRange(double nearVal, double farVal) {}
 
     @Override
-    public void scissor(int x, int y, int width, int height) {}
+    public void scissor(int x, int y, int width, int height) {
+        int[] v = st().scissor;
+        v[0] = x;
+        v[1] = y;
+        v[2] = width;
+        v[3] = height;
+    }
 
     @Override
-    public void lineWidth(float width) {}
+    public void lineWidth(float width) {
+        st().lineWidth = width;
+    }
 
     @Override
     public void pointSize(float size) {}
@@ -1539,31 +1622,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void hint(int target, int mode) {}
 
     @Override
-    public void drawArrays(int mode, int first, int count) {}
-
-    @Override
-    public void drawElements(int mode, int count, int type, long indices) {}
-
-    @Override
-    public void multiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride) {}
-
-    @Override
-    public void drawElementsInstanced(int mode, int count, int type, long indices, int primcount) {}
-
-    @Override
-    public void drawArraysInstanced(int mode, int first, int count, int primcount) {}
-
-    @Override
-    public void drawElementsBaseVertex(int mode, int count, int type, long indices, int baseVertex) {}
-
-    @Override
-    public void multiDrawElementsBaseVertex(int mode, long pCount, int type, long pIndices, int drawcount,
-        long pBaseVertex) {}
-
-    @Override
-    public void multiDrawArrays(int mode, IntBuffer firsts, IntBuffer counts) {}
-
-    @Override
     public void primitiveRestartIndex(int index) {}
 
     @Override
@@ -1573,17 +1631,163 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void pointParameteri(int pname, int param) {}
 
     @Override
-    public void drawBuffer(int mode) {}
+    public void vertexAttrib2f(int index, float v0, float v1) {
+        vertexAttrib4f(index, v0, v1, 0f, 1f);
+    }
 
     @Override
-    public void dispatchCompute(int numGroupsX, int numGroupsY, int numGroupsZ) {}
+    public void vertexAttrib3f(int index, float v0, float v1, float v2) {
+        vertexAttrib4f(index, v0, v1, v2, 1f);
+    }
 
     @Override
-    public void dispatchComputeIndirect(long offset) {}
+    public void vertexAttrib4f(int index, float v0, float v1, float v2, float v3) {
+        if (index < 0 || index >= 16) return;
+        float[] a = st().attribValues[index];
+        a[0] = v0;
+        a[1] = v1;
+        a[2] = v2;
+        a[3] = v3;
+    }
+
+    // ------------------------------------------------------------------ vertex arrays
 
     @Override
-    public void copyTexSubImage2D(int target, int level, int xoffset, int yoffset, int x, int y, int width,
-        int height) {}
+    public int genVertexArrays() {
+        int id = nextId();
+        rnd().vaos.put(id, new VulkanRenderer.VertexArray());
+        return id;
+    }
+
+    @Override
+    public void deleteVertexArrays(int array) {
+        rnd().vaos.remove(array);
+        if (res().ctx().vao == array) bindVertexArray(0);
+    }
+
+    @Override
+    public void bindVertexArray(int array) {
+        GLResources.Ctx c = res().ctx();
+        c.vao = array;
+        c.bound[GLResources.slot(0x8893)] = vao().elementBuffer;
+    }
+
+    @Override
+    public boolean isVertexArray(int array) {
+        return rnd().vaos.containsKey(array);
+    }
+
+    @Override
+    public void bindBuffer(int target, int buffer) {
+        GLResources r = res();
+        r.ctx().bound[GLResources.slot(target)] = buffer;
+        if (buffer != 0) r.buffer(buffer);
+        if (target == 0x8893) vao().elementBuffer = buffer;
+    }
+
+    private void pointer(int index, int size, int type, boolean normalized, boolean integer, int stride, long pointer) {
+        if (index < 0 || index >= 16) return;
+        VulkanRenderer.VertexArray v = vao();
+        v.buffer[index] = res().ctx().bound[GLResources.slot(0x8892)];
+        v.size[index] = size == 0x80E1 ? 4 : size; // GL_BGRA size
+        v.type[index] = type;
+        v.normalized[index] = normalized;
+        v.integer[index] = integer;
+        v.stride[index] = stride;
+        v.offset[index] = pointer;
+        v.binding[index] = -1;
+    }
+
+    @Override
+    public void vertexAttribPointer(int index, int size, int type, boolean normalized, int stride, long pointer) {
+        pointer(index, size, type, normalized, false, stride, pointer);
+    }
+
+    @Override
+    public void vertexAttribIPointer(int index, int size, int type, int stride, long pointer) {
+        pointer(index, size, type, false, true, stride, pointer);
+    }
+
+    @Override
+    public void enableVertexAttribArray(int index) {
+        if (index >= 0 && index < 16) vao().enabled[index] = true;
+    }
+
+    @Override
+    public void disableVertexAttribArray(int index) {
+        if (index >= 0 && index < 16) vao().enabled[index] = false;
+    }
+
+    @Override
+    public void vertexAttribDivisor(int index, int divisor) {
+        if (index >= 0 && index < 16) vao().divisor[index] = divisor;
+    }
+
+    @Override
+    public void bindVertexBuffer(int bindingindex, int buffer, long offset, int stride) {
+        if (bindingindex < 0 || bindingindex >= 16) return;
+        VulkanRenderer.VertexArray v = vao();
+        v.bindingBuffer[bindingindex] = buffer;
+        v.bindingOffset[bindingindex] = offset;
+        v.bindingStride[bindingindex] = stride;
+        v.resolve();
+    }
+
+    @Override
+    public void vertexAttribFormat(int attribindex, int size, int type, boolean normalized, int relativeoffset) {
+        format(attribindex, size, type, normalized, false, relativeoffset);
+    }
+
+    @Override
+    public void vertexAttribIFormat(int attribindex, int size, int type, int relativeoffset) {
+        format(attribindex, size, type, false, true, relativeoffset);
+    }
+
+    private void format(int index, int size, int type, boolean normalized, boolean integer, int relativeoffset) {
+        if (index < 0 || index >= 16) return;
+        VulkanRenderer.VertexArray v = vao();
+        v.size[index] = size == 0x80E1 ? 4 : size;
+        v.type[index] = type;
+        v.normalized[index] = normalized;
+        v.integer[index] = integer;
+        v.relativeOffset[index] = relativeoffset;
+        if (v.binding[index] < 0) v.binding[index] = index;
+        v.resolve();
+    }
+
+    @Override
+    public void vertexAttribBinding(int attribindex, int bindingindex) {
+        if (attribindex < 0 || attribindex >= 16) return;
+        VulkanRenderer.VertexArray v = vao();
+        v.binding[attribindex] = bindingindex;
+        v.resolve();
+    }
+
+    // ------------------------------------------------------------------ uniform buffer bindings
+
+    @Override
+    public void bindBufferBase(int target, int index, int buffer) {
+        bindBufferRange(target, index, buffer, 0, -1);
+    }
+
+    @Override
+    public void bindBufferRange(int target, int index, int buffer, long offset, long size) {
+        GLResources.Ctx c = res().ctx();
+        c.bound[GLResources.slot(target)] = buffer;
+        if (target == 0x8A11 && index >= 0 && index < c.uboBuffer.length) { // UNIFORM_BUFFER
+            c.uboBuffer[index] = buffer;
+            c.uboOffset[index] = offset;
+            c.uboSize[index] = size;
+        }
+    }
+
+    @Override
+    public int getIndexedBufferBinding(int target, int index) {
+        GLResources.Ctx c = res().ctx();
+        return target == 0x8A11 && index >= 0 && index < c.uboBuffer.length ? c.uboBuffer[index] : 0;
+    }
+
+    // ------------------------------------------------------------------ samplers (texture parameters are used instead)
 
     @Override
     public int genSamplers() {
@@ -1603,60 +1807,303 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void samplerParameterf(int sampler, int pname, float param) {}
 
     @Override
+    public boolean isSampler(int sampler) {
+        return false;
+    }
+
+    // ------------------------------------------------------------------ framebuffers
+
+    @Override
+    public void bindFramebuffer(int target, int framebuffer) {
+        GLResources.Ctx c = res().ctx();
+        if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) c.drawFramebuffer = framebuffer;
+        if (target == GL_FRAMEBUFFER || target == 0x8CA8) c.readFramebuffer = framebuffer; // READ_FRAMEBUFFER
+    }
+
+    private VulkanRenderer.Framebuffer fbo(int target) {
+        GLResources.Ctx c = res().ctx();
+        int id = target == 0x8CA8 ? c.readFramebuffer : c.drawFramebuffer;
+        return id == 0 ? null : rnd().framebuffers.get(id);
+    }
+
+    @Override
     public int genFramebuffers() {
-        return nextId();
+        int id = nextId();
+        rnd().framebuffers.put(id, new VulkanRenderer.Framebuffer());
+        return id;
     }
 
     @Override
-    public void deleteFramebuffers(int framebuffer) {}
-
-    @Override
-    public void framebufferTexture2D(int target, int attachment, int textarget, int texture, int level) {}
-
-    @Override
-    public void framebufferTexture1D(int target, int attachment, int textarget, int texture, int level) {}
-
-    @Override
-    public void framebufferTexture3D(int target, int attachment, int textarget, int texture, int level, int zoffset) {}
-
-    @Override
-    public void framebufferTextureLayer(int target, int attachment, int texture, int level, int layer) {}
-
-    @Override
-    public void framebufferTexture(int target, int attachment, int texture, int level) {}
-
-    @Override
-    public int genRenderbuffers() {
-        return nextId();
+    public int createFramebuffers() {
+        return genFramebuffers();
     }
 
     @Override
-    public void deleteRenderbuffers(int renderbuffer) {}
+    public void deleteFramebuffers(int framebuffer) {
+        if (rnd().framebuffers.remove(framebuffer) == null) return;
+        synchronized (res().lock) {
+            rnd().endRendering();
+        }
+        GLResources.Ctx c = res().ctx();
+        if (c.drawFramebuffer == framebuffer) c.drawFramebuffer = 0;
+        if (c.readFramebuffer == framebuffer) c.readFramebuffer = 0;
+    }
 
     @Override
-    public void bindRenderbuffer(int target, int renderbuffer) {}
+    public boolean isFramebuffer(int framebuffer) {
+        return rnd().framebuffers.containsKey(framebuffer);
+    }
+
+    private void attach(VulkanRenderer.Framebuffer fb, int attachment, int texture, int level, int renderbuffer) {
+        if (fb == null) return;
+        synchronized (res().lock) {
+            rnd().endRendering();
+        }
+        if (attachment >= 0x8CE0 && attachment < 0x8CE8) { // COLOR_ATTACHMENTi
+            int i = attachment - 0x8CE0;
+            fb.colorTexture[i] = texture;
+            fb.colorLevel[i] = level;
+            fb.colorRenderbuffer[i] = renderbuffer;
+        } else if (attachment == 0x8D00 || attachment == 0x821A || attachment == 0x8D20) {
+            // DEPTH, DEPTH_STENCIL; a stencil-only attachment shares the depth image
+            if (texture != 0 || renderbuffer != 0 || attachment != 0x8D20) {
+                fb.depthTexture = texture;
+                fb.depthRenderbuffer = renderbuffer;
+            }
+        }
+    }
 
     @Override
-    public void renderbufferStorage(int target, int internalformat, int width, int height) {}
+    public void framebufferTexture2D(int target, int attachment, int textarget, int texture, int level) {
+        attach(fbo(target), attachment, texture, level, 0);
+    }
 
     @Override
-    public void renderbufferStorageMultisample(int target, int samples, int internalformat, int width, int height) {}
+    public void framebufferTexture1D(int target, int attachment, int textarget, int texture, int level) {
+        attach(fbo(target), attachment, texture, level, 0);
+    }
 
     @Override
-    public void framebufferRenderbuffer(int target, int attachment, int renderbuffertarget, int renderbuffer) {}
+    public void framebufferTexture3D(int target, int attachment, int textarget, int texture, int level, int zoffset) {
+        attach(fbo(target), attachment, texture, level, 0);
+    }
+
+    @Override
+    public void framebufferTextureLayer(int target, int attachment, int texture, int level, int layer) {
+        attach(fbo(target), attachment, texture, level, 0);
+    }
+
+    @Override
+    public void framebufferTexture(int target, int attachment, int texture, int level) {
+        attach(fbo(target), attachment, texture, level, 0);
+    }
+
+    @Override
+    public void namedFramebufferTexture(int framebuffer, int attachment, int texture, int level) {
+        attach(rnd().framebuffers.get(framebuffer), attachment, texture, level, 0);
+    }
+
+    @Override
+    public void framebufferRenderbuffer(int target, int attachment, int renderbuffertarget, int renderbuffer) {
+        attach(fbo(target), attachment, 0, 0, renderbuffer);
+    }
+
+    @Override
+    public int checkFramebufferStatus(int target) {
+        return 0x8CD5; // FRAMEBUFFER_COMPLETE
+    }
+
+    @Override
+    public void drawBuffer(int mode) {
+        VulkanRenderer.Framebuffer fb = fbo(GL_DRAW_FRAMEBUFFER);
+        if (fb != null) fb.drawBuffers = mode == 0 ? new int[0] : new int[] { mode - 0x8CE0 };
+    }
+
+    @Override
+    public void drawBuffers(int buffer) {
+        drawBuffer(buffer);
+    }
+
+    @Override
+    public void drawBuffers(IntBuffer bufs) {
+        VulkanRenderer.Framebuffer fb = fbo(GL_DRAW_FRAMEBUFFER);
+        if (fb == null) return;
+        int n = bufs.remaining();
+        int[] list = new int[n];
+        int k = 0;
+        for (int i = 0; i < n; i++) {
+            int b = bufs.get(bufs.position() + i);
+            if (b != 0) list[k++] = b - 0x8CE0;
+        }
+        fb.drawBuffers = java.util.Arrays.copyOf(list, k);
+    }
+
+    @Override
+    public void namedFramebufferDrawBuffers(int framebuffer, IntBuffer bufs) {
+        GLResources.Ctx c = res().ctx();
+        int saved = c.drawFramebuffer;
+        c.drawFramebuffer = framebuffer;
+        drawBuffers(bufs);
+        c.drawFramebuffer = saved;
+    }
+
+    @Override
+    public void readBuffer(int mode) {
+        VulkanRenderer.Framebuffer fb = fbo(0x8CA8);
+        if (fb != null && mode >= 0x8CE0 && mode < 0x8CE8) fb.readBuffer = mode - 0x8CE0;
+    }
+
+    @Override
+    public void namedFramebufferReadBuffer(int framebuffer, int mode) {
+        VulkanRenderer.Framebuffer fb = rnd().framebuffers.get(framebuffer);
+        if (fb != null && mode >= 0x8CE0 && mode < 0x8CE8) fb.readBuffer = mode - 0x8CE0;
+    }
 
     @Override
     public void blitFramebuffer(int srcX0, int srcY0, int srcX1, int srcY1, int dstX0, int dstY0, int dstX1, int dstY1,
-        int mask, int filter) {}
+        int mask, int filter) {
+        rnd().blit(res().ctx(), srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+    }
 
     @Override
-    public void drawBuffers(int buffer) {}
+    public void blitNamedFramebuffer(int readFramebuffer, int drawFramebuffer, int srcX0, int srcY0, int srcX1,
+        int srcY1, int dstX0, int dstY0, int dstX1, int dstY1, int mask, int filter) {
+        GLResources.Ctx c = res().ctx();
+        int r = c.readFramebuffer, d = c.drawFramebuffer;
+        c.readFramebuffer = readFramebuffer;
+        c.drawFramebuffer = drawFramebuffer;
+        try {
+            rnd().blit(c, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        } finally {
+            c.readFramebuffer = r;
+            c.drawFramebuffer = d;
+        }
+    }
 
     @Override
-    public void drawBuffers(IntBuffer bufs) {}
+    public void copyTexSubImage2D(int target, int level, int xoffset, int yoffset, int x, int y, int width,
+        int height) {
+        rnd().copyToTexture(res().ctx(), res().boundTexture(), level, xoffset, yoffset, x, y, width, height);
+    }
 
     @Override
-    public void readBuffer(int mode) {}
+    public void copyTextureSubImage2D(int texture, int target, int level, int xoffset, int yoffset, int x, int y,
+        int width, int height) {
+        rnd().copyToTexture(res().ctx(), res().textures.get(texture), level, xoffset, yoffset, x, y, width, height);
+    }
+
+    // ------------------------------------------------------------------ renderbuffers
+
+    private int boundRenderbuffer;
+
+    @Override
+    public int genRenderbuffers() {
+        int id = nextId();
+        rnd().renderbuffers.put(id, new VulkanRenderer.Renderbuffer());
+        return id;
+    }
+
+    @Override
+    public void deleteRenderbuffers(int renderbuffer) {
+        rnd().releaseRenderbuffer(rnd().renderbuffers.remove(renderbuffer));
+    }
+
+    @Override
+    public void bindRenderbuffer(int target, int renderbuffer) {
+        boundRenderbuffer = renderbuffer;
+    }
+
+    @Override
+    public boolean isRenderbuffer(int renderbuffer) {
+        return rnd().renderbuffers.containsKey(renderbuffer);
+    }
+
+    @Override
+    public void renderbufferStorage(int target, int internalformat, int width, int height) {
+        VulkanRenderer.Renderbuffer rb = rnd().renderbuffers.get(boundRenderbuffer);
+        if (rb == null) return;
+        rnd().releaseRenderbuffer(rb);
+        GLResources r = res();
+        synchronized (r.lock) {
+            rb.internal = internalformat;
+            rb.image = new VulkanImage(
+                r.dev,
+                width,
+                height,
+                1,
+                Formats.vulkan(internalformat, r.dev.depthFormat()),
+                Formats.isDepth(internalformat));
+        }
+    }
+
+    @Override
+    public void renderbufferStorageMultisample(int target, int samples, int internalformat, int width, int height) {
+        renderbufferStorage(target, internalformat, width, height);
+    }
+
+    // ------------------------------------------------------------------ clears and draws
+
+    @Override
+    public void clear(int mask) {
+        rnd().clear(res().ctx(), mask);
+    }
+
+    @Override
+    public void drawArrays(int mode, int first, int count) {
+        rnd().draw(res().ctx(), VulkanRenderer.DRAW_ARRAYS, mode, first, count, 0, 1, 0, 0);
+    }
+
+    @Override
+    public void drawArraysInstanced(int mode, int first, int count, int primcount) {
+        rnd().draw(res().ctx(), VulkanRenderer.DRAW_ARRAYS, mode, first, count, 0, primcount, 0, 0);
+    }
+
+    @Override
+    public void multiDrawArrays(int mode, IntBuffer firsts, IntBuffer counts) {
+        int n = Math.min(firsts.remaining(), counts.remaining());
+        for (int i = 0; i < n; i++)
+            drawArrays(mode, firsts.get(firsts.position() + i), counts.get(counts.position() + i));
+    }
+
+    @Override
+    public void drawElements(int mode, int count, int type, long indices) {
+        rnd().draw(res().ctx(), VulkanRenderer.DRAW_ELEMENTS, mode, (int) indices, count, type, 1, 0, 0);
+    }
+
+    @Override
+    public void drawElementsInstanced(int mode, int count, int type, long indices, int primcount) {
+        rnd().draw(res().ctx(), VulkanRenderer.DRAW_ELEMENTS, mode, (int) indices, count, type, primcount, 0, 0);
+    }
+
+    @Override
+    public void drawElementsBaseVertex(int mode, int count, int type, long indices, int baseVertex) {
+        rnd().draw(res().ctx(), VulkanRenderer.DRAW_ELEMENTS, mode, (int) indices, count, type, 1, baseVertex, 0);
+    }
+
+    @Override
+    public void multiDrawElementsBaseVertex(int mode, long pCount, int type, long pIndices, int drawcount,
+        long pBaseVertex) {
+        for (int i = 0; i < drawcount; i++) {
+            int count = org.lwjgl.system.MemoryUtil.memGetInt(pCount + 4L * i);
+            long indices = org.lwjgl.system.MemoryUtil
+                .memGetAddress(pIndices + (long) org.lwjgl.system.Pointer.POINTER_SIZE * i);
+            int base = pBaseVertex == 0 ? 0 : org.lwjgl.system.MemoryUtil.memGetInt(pBaseVertex + 4L * i);
+            drawElementsBaseVertex(mode, count, type, indices, base);
+        }
+    }
+
+    @Override
+    public void multiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride) {
+        rnd().draw(res().ctx(), VulkanRenderer.DRAW_INDIRECT, mode, (int) indirect, drawcount, type, 1, 0, stride);
+    }
+
+    // ------------------------------------------------------------------ not drawn yet (generated)
+
+    @Override
+    public void dispatchCompute(int numGroupsX, int numGroupsY, int numGroupsZ) {}
+
+    @Override
+    public void dispatchComputeIndirect(long offset) {}
 
     @Override
     public void readPixels(int x, int y, int width, int height, int format, int type, ByteBuffer pixels) {}
@@ -1709,109 +2156,9 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void getShaderSource(int shader, IntBuffer length, ByteBuffer source) {}
 
     @Override
-    public void vertexAttrib2f(int index, float v0, float v1) {}
-
-    @Override
-    public void vertexAttrib3f(int index, float v0, float v1, float v2) {}
-
-    @Override
-    public void vertexAttrib4f(int index, float v0, float v1, float v2, float v3) {}
-
-    @Override
-    public void bindBufferBase(int target, int index, int buffer) {}
-
-    @Override
-    public void bindBufferRange(int target, int index, int buffer, long offset, long size) {}
-
-    @Override
-    public int getIndexedBufferBinding(int target, int index) {
-        return 0;
-    }
-
-    @Override
-    public boolean isFramebuffer(int framebuffer) {
-        return true;
-    }
-
-    @Override
-    public boolean isRenderbuffer(int renderbuffer) {
-        return true;
-    }
-
-    @Override
-    public boolean isSampler(int sampler) {
-        return true;
-    }
-
-    @Override
     public boolean isQuery(int query) {
         return true;
     }
-
-    @Override
-    public int genVertexArrays() {
-        return nextId();
-    }
-
-    @Override
-    public void deleteVertexArrays(int array) {}
-
-    @Override
-    public void bindVertexArray(int array) {}
-
-    @Override
-    public boolean isVertexArray(int array) {
-        return true;
-    }
-
-    @Override
-    public void vertexAttribPointer(int index, int size, int type, boolean normalized, int stride, long pointer) {}
-
-    @Override
-    public void vertexAttribIPointer(int index, int size, int type, int stride, long pointer) {}
-
-    @Override
-    public void enableVertexAttribArray(int index) {}
-
-    @Override
-    public void disableVertexAttribArray(int index) {}
-
-    @Override
-    public void vertexAttribDivisor(int index, int divisor) {}
-
-    @Override
-    public void bindVertexBuffer(int bindingindex, int buffer, long offset, int stride) {}
-
-    @Override
-    public void vertexAttribFormat(int attribindex, int size, int type, boolean normalized, int relativeoffset) {}
-
-    @Override
-    public void vertexAttribIFormat(int attribindex, int size, int type, int relativeoffset) {}
-
-    @Override
-    public void vertexAttribBinding(int attribindex, int bindingindex) {}
-
-    @Override
-    public int createFramebuffers() {
-        return nextId();
-    }
-
-    @Override
-    public void namedFramebufferTexture(int framebuffer, int attachment, int texture, int level) {}
-
-    @Override
-    public void namedFramebufferReadBuffer(int framebuffer, int mode) {}
-
-    @Override
-    public void namedFramebufferDrawBuffers(int framebuffer, IntBuffer bufs) {}
-
-    @Override
-    public void blitNamedFramebuffer(int readFramebuffer, int drawFramebuffer, int srcX0, int srcY0, int srcX1,
-        int srcY1, int dstX0, int dstY0, int dstX1, int dstY1, int mask, int filter) {}
-
-    @Override
-    public void copyTextureSubImage2D(int texture, int target, int level, int xoffset, int yoffset, int x, int y,
-        int width, int height) {}
 
     @Override
     public void clearBufferSubData(int target, int internalFormat, long offset, long size, int format, int type,

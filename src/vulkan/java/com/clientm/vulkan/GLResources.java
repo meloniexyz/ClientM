@@ -89,6 +89,13 @@ final class GLResources {
         int clearStencil;
         /** The program in use (glUseProgram). */
         int program;
+        /** The vertex array in use (glBindVertexArray). */
+        int vao;
+        final RenderState state = new RenderState();
+        /** Indexed uniform buffer bindings (glBindBufferRange / glBindBufferBase on GL_UNIFORM_BUFFER). */
+        final int[] uboBuffer = new int[64];
+        final long[] uboOffset = new long[64];
+        final long[] uboSize = new long[64];
     }
 
     private final ThreadLocal<Ctx> context = ThreadLocal.withInitial(Ctx::new);

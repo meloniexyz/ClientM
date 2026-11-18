@@ -16,8 +16,12 @@ final class Barriers {
 
     private Barriers() {}
 
+    /** Ends any rendering in progress: barriers are not allowed inside it. Set by the renderer. */
+    static volatile Runnable outsideRendering = () -> {};
+
     /** All earlier GPU work, including its memory writes, is finished and visible before any later work starts. */
     static void full(VkCommandBuffer cmd) {
+        outsideRendering.run();
         try (MemoryStack stack = stackPush()) {
             VkMemoryBarrier.Buffer b = VkMemoryBarrier.calloc(1, stack);
             b.get(0)
@@ -36,6 +40,7 @@ final class Barriers {
     }
 
     static void image(VkCommandBuffer cmd, long image, int aspect, int from, int to) {
+        outsideRendering.run();
         try (MemoryStack stack = stackPush()) {
             VkImageMemoryBarrier.Buffer b = VkImageMemoryBarrier.calloc(1, stack);
             b.get(0)

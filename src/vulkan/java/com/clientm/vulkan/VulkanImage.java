@@ -26,6 +26,8 @@ final class VulkanImage {
     long image, memory, view;
     /** One view per mip level, for drawing into a single level. */
     long[] levelViews;
+    /** For depth images: a view with depth and stencil, for drawing into. */
+    long attachView;
 
     VulkanImage(VulkanDevice dev, int width, int height, int levels, int format, boolean depth) {
         this.width = Math.max(1, width);
@@ -68,6 +70,7 @@ final class VulkanImage {
             vkBindImageMemory(vk, image, memory, 0);
 
             view = createView(vk, stack, 0, this.levels);
+            attachView = depth ? createView(vk, stack, 0, 1, aspect) : 0;
             levelViews = new long[this.levels];
             for (int i = 0; i < this.levels; i++) levelViews[i] = this.levels == 1 ? view : createView(vk, stack, i, 1);
         }
@@ -75,13 +78,17 @@ final class VulkanImage {
     }
 
     private long createView(VkDevice vk, MemoryStack stack, int baseLevel, int count) {
+        return createView(vk, stack, baseLevel, count, depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT);
+    }
+
+    private long createView(VkDevice vk, MemoryStack stack, int baseLevel, int count, int viewAspect) {
         VkImageViewCreateInfo info = VkImageViewCreateInfo.calloc(stack)
             .sType$Default()
             .image(image)
             .viewType(VK_IMAGE_VIEW_TYPE_2D)
             .format(format)
             .subresourceRange(
-                r -> r.aspectMask(depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT)
+                r -> r.aspectMask(viewAspect)
                     .baseMipLevel(baseLevel)
                     .levelCount(count)
                     .layerCount(1));
@@ -92,13 +99,14 @@ final class VulkanImage {
 
     /** Frees the image once the graphics card can no longer be using it. */
     void release(VulkanDevice dev) {
-        final long img = image, mem = memory, v = view;
+        final long img = image, mem = memory, v = view, av = attachView;
         final long[] lv = levelViews;
         image = memory = view = 0;
         dev.later(() -> {
             VkDevice vk = dev.vk();
             for (long l : lv) if (l != v) vkDestroyImageView(vk, l, null);
             vkDestroyImageView(vk, v, null);
+            if (av != 0) vkDestroyImageView(vk, av, null);
             vkDestroyImage(vk, img, null);
             vkFreeMemory(vk, mem, null);
         });
