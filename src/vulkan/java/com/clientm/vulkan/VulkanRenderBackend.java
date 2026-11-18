@@ -294,26 +294,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     }
 
     @Override
-    public int getShaderi(int shader, int pname) {
-        return pname == 0x8B81 ? 1 : 0; // COMPILE_STATUS
-    }
-
-    @Override
-    public int getProgrami(int program, int pname) {
-        return pname == 0x8B82 || pname == 0x8B83 ? 1 : 0; // LINK_STATUS, VALIDATE_STATUS
-    }
-
-    @Override
-    public String getShaderInfoLog(int shader, int maxLength) {
-        return "";
-    }
-
-    @Override
-    public String getProgramInfoLog(int program, int maxLength) {
-        return "";
-    }
-
-    @Override
     public void getShaderInfoLog(int shader, IntBuffer length, ByteBuffer infoLog) {
         if (length != null) length.put(length.position(), 0);
     }
@@ -341,31 +321,6 @@ public final class VulkanRenderBackend extends RenderBackend {
         int end = 0;
         while (end < bytes.length && bytes[end] != 0) end++;
         return new String(bytes, 0, end, StandardCharsets.UTF_8);
-    }
-
-    @Override
-    public int getUniformLocation(int program, CharSequence name) {
-        return location(program, "u:" + name);
-    }
-
-    @Override
-    public int getUniformLocation(int program, ByteBuffer name) {
-        return location(program, "u:" + text(name));
-    }
-
-    @Override
-    public int getAttribLocation(int program, CharSequence name) {
-        return location(program, "a:" + name) % 16;
-    }
-
-    @Override
-    public int getAttribLocation(int program, ByteBuffer name) {
-        return location(program, "a:" + text(name)) % 16;
-    }
-
-    @Override
-    public int getUniformBlockIndex(int program, CharSequence name) {
-        return 0;
     }
 
     // Optional commands that the base contract refuses unless a backend implements them. Until the GPU work is real,
@@ -1172,6 +1127,319 @@ public final class VulkanRenderBackend extends RenderBackend {
     @Override
     public void waitSync(long sync, int flags, long timeout) {}
 
+    // ================================================================== stage 2: shaders, programs, uniforms
+
+    private volatile VulkanShaders shaderStore;
+
+    private VulkanShaders sh() {
+        VulkanShaders s = shaderStore;
+        if (s != null) return s;
+        synchronized (this) {
+            if (shaderStore == null) shaderStore = new VulkanShaders(VulkanGate.device());
+            return shaderStore;
+        }
+    }
+
+    private static final ThreadLocal<float[]> FLOATS = ThreadLocal.withInitial(() -> new float[64]);
+    private static final ThreadLocal<int[]> INTS = ThreadLocal.withInitial(() -> new int[64]);
+
+    private VulkanShaders.GLProgram current() {
+        return sh().programs.get(res().ctx().program);
+    }
+
+    @Override
+    public int createShader(int type) {
+        int id = nextId();
+        sh().shaders.put(id, new VulkanShaders.GLShader(id, type));
+        return id;
+    }
+
+    @Override
+    public void shaderSource(int shader, CharSequence source) {
+        VulkanShaders.GLShader s = sh().shaders.get(shader);
+        if (s != null) s.source = source.toString();
+    }
+
+    @Override
+    public void compileShader(int shader) {
+        VulkanShaders.GLShader s = sh().shaders.get(shader);
+        if (s != null) sh().compile(s);
+    }
+
+    @Override
+    public void deleteShader(int shader) {
+        VulkanShaders.GLShader s = sh().shaders.remove(shader);
+        if (s != null && s.spirv != null) {
+            final java.nio.ByteBuffer code = s.spirv;
+            s.spirv = null;
+            org.lwjgl.system.MemoryUtil.memFree(code);
+        }
+    }
+
+    @Override
+    public int getShaderi(int shader, int pname) {
+        VulkanShaders.GLShader s = sh().shaders.get(shader);
+        if (s == null) return 0;
+        switch (pname) {
+            case 0x8B81: // COMPILE_STATUS
+                return s.compiled ? 1 : 0;
+            case 0x8B84: // INFO_LOG_LENGTH
+                return s.log.isEmpty() ? 0 : s.log.length() + 1;
+            case 0x8B4F: // SHADER_TYPE
+                return s.type;
+            case 0x8B88: // SHADER_SOURCE_LENGTH
+                return s.source.length() + 1;
+            default:
+                return 0;
+        }
+    }
+
+    @Override
+    public String getShaderInfoLog(int shader, int maxLength) {
+        VulkanShaders.GLShader s = sh().shaders.get(shader);
+        return s == null ? "" : s.log;
+    }
+
+    @Override
+    public int createProgram() {
+        int id = nextId();
+        sh().programs.put(id, new VulkanShaders.GLProgram(id));
+        return id;
+    }
+
+    @Override
+    public void attachShader(int program, int shader) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        VulkanShaders.GLShader s = sh().shaders.get(shader);
+        if (p == null || s == null) return;
+        if (s.type == VulkanShaders.GL_VERTEX_SHADER) p.vs = s;
+        else if (s.type == VulkanShaders.GL_FRAGMENT_SHADER) p.fs = s;
+    }
+
+    @Override
+    public void detachShader(int program, int shader) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        if (p == null) return;
+        if (p.vs != null && p.vs.id == shader) p.vs = null;
+        if (p.fs != null && p.fs.id == shader) p.fs = null;
+    }
+
+    @Override
+    public void bindAttribLocation(int program, int index, CharSequence name) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        if (p != null) p.attribBindings.put(name.toString(), index);
+    }
+
+    @Override
+    public void linkProgram(int program) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        if (p == null) return;
+        GLResources r = res();
+        synchronized (r.lock) {
+            sh().link(p);
+        }
+        if (!p.linked) LOG.error("Program {} did not link for Vulkan: {}", program, p.log);
+    }
+
+    @Override
+    public void deleteProgram(int program) {
+        VulkanShaders.GLProgram p = sh().programs.remove(program);
+        if (p != null) synchronized (res().lock) {
+            sh().destroyProgramObjects(p);
+        }
+    }
+
+    @Override
+    public int getProgrami(int program, int pname) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        if (p == null) return 0;
+        switch (pname) {
+            case 0x8B82: // LINK_STATUS
+            case 0x8B83: // VALIDATE_STATUS
+                return p.linked ? 1 : 0;
+            case 0x8B84: // INFO_LOG_LENGTH
+                return p.log.isEmpty() ? 0 : p.log.length() + 1;
+            case 0x8B85: // ATTACHED_SHADERS
+                return (p.vs != null ? 1 : 0) + (p.fs != null ? 1 : 0);
+            default:
+                return 0;
+        }
+    }
+
+    @Override
+    public String getProgramInfoLog(int program, int maxLength) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        return p == null ? "" : p.log;
+    }
+
+    @Override
+    public void useProgram(int program) {
+        res().ctx().program = program;
+    }
+
+    @Override
+    public int getUniformLocation(int program, CharSequence name) {
+        return VulkanShaders.location(sh().programs.get(program), name.toString());
+    }
+
+    @Override
+    public int getUniformLocation(int program, ByteBuffer name) {
+        return VulkanShaders.location(sh().programs.get(program), text(name));
+    }
+
+    @Override
+    public int getAttribLocation(int program, CharSequence name) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        if (p == null) return -1;
+        Integer loc = p.attribLocations.get(name.toString());
+        return loc == null ? -1 : loc;
+    }
+
+    @Override
+    public int getAttribLocation(int program, ByteBuffer name) {
+        return getAttribLocation(program, text(name));
+    }
+
+    @Override
+    public int getUniformBlockIndex(int program, CharSequence name) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        return p != null && (p.vsUboSize > 0 || p.fsUboSize > 0) ? 0 : -1;
+    }
+
+    @Override
+    public void uniformBlockBinding(int program, int blockIndex, int binding) {
+        VulkanShaders.GLProgram p = sh().programs.get(program);
+        if (p != null) p.externalUboBinding = binding;
+    }
+
+    private void uf(int location, int count, int components, int columns, float a, float b, float c, float d) {
+        float[] f = FLOATS.get();
+        f[0] = a;
+        f[1] = b;
+        f[2] = c;
+        f[3] = d;
+        VulkanShaders.write(current(), location, f, null, count, components, columns);
+    }
+
+    private void ui(int location, int components, int a, int b, int c, int d) {
+        int[] v = INTS.get();
+        v[0] = a;
+        v[1] = b;
+        v[2] = c;
+        v[3] = d;
+        VulkanShaders.write(current(), location, null, v, 1, components, 1);
+    }
+
+    private void ufb(int location, java.nio.FloatBuffer value, int components, int columns) {
+        int n = value.remaining();
+        float[] f = FLOATS.get();
+        if (f.length < n) {
+            f = new float[n];
+            FLOATS.set(f);
+        }
+        value.duplicate()
+            .get(f, 0, n);
+        int per = components * columns;
+        VulkanShaders.write(current(), location, f, null, Math.max(1, n / per), components, columns);
+    }
+
+    private void uib(int location, IntBuffer value, int components) {
+        int n = value.remaining();
+        int[] v = INTS.get();
+        if (v.length < n) {
+            v = new int[n];
+            INTS.set(v);
+        }
+        value.duplicate()
+            .get(v, 0, n);
+        VulkanShaders.write(current(), location, null, v, Math.max(1, n / components), components, 1);
+    }
+
+    @Override
+    public void uniform1f(int location, float v0) {
+        uf(location, 1, 1, 1, v0, 0, 0, 0);
+    }
+
+    @Override
+    public void uniform2f(int location, float v0, float v1) {
+        uf(location, 1, 2, 1, v0, v1, 0, 0);
+    }
+
+    @Override
+    public void uniform3f(int location, float v0, float v1, float v2) {
+        uf(location, 1, 3, 1, v0, v1, v2, 0);
+    }
+
+    @Override
+    public void uniform4f(int location, float v0, float v1, float v2, float v3) {
+        uf(location, 1, 4, 1, v0, v1, v2, v3);
+    }
+
+    @Override
+    public void uniform1i(int location, int v0) {
+        ui(location, 1, v0, 0, 0, 0);
+    }
+
+    @Override
+    public void uniform2i(int location, int v0, int v1) {
+        ui(location, 2, v0, v1, 0, 0);
+    }
+
+    @Override
+    public void uniform3i(int location, int v0, int v1, int v2) {
+        ui(location, 3, v0, v1, v2, 0);
+    }
+
+    @Override
+    public void uniform4i(int location, int v0, int v1, int v2, int v3) {
+        ui(location, 4, v0, v1, v2, v3);
+    }
+
+    @Override
+    public void uniform1iv(int location, IntBuffer value) {
+        uib(location, value, 1);
+    }
+
+    @Override
+    public void uniform2iv(int location, IntBuffer value) {
+        uib(location, value, 2);
+    }
+
+    @Override
+    public void uniform3iv(int location, IntBuffer value) {
+        uib(location, value, 3);
+    }
+
+    @Override
+    public void uniform4iv(int location, IntBuffer value) {
+        uib(location, value, 4);
+    }
+
+    @Override
+    public void uniform2(int location, java.nio.FloatBuffer value) {
+        ufb(location, value, 2, 1);
+    }
+
+    @Override
+    public void uniform3(int location, java.nio.FloatBuffer value) {
+        ufb(location, value, 3, 1);
+    }
+
+    @Override
+    public void uniform4(int location, java.nio.FloatBuffer value) {
+        ufb(location, value, 4, 1);
+    }
+
+    @Override
+    public void uniformMatrix3(int location, boolean transpose, java.nio.FloatBuffer value) {
+        ufb(location, value, 3, 3);
+    }
+
+    @Override
+    public void uniformMatrix4(int location, boolean transpose, java.nio.FloatBuffer value) {
+        ufb(location, value, 4, 4);
+    }
+
     // ------------------------------------------------------------------ not drawn yet (generated)
 
     @Override
@@ -1417,40 +1685,6 @@ public final class VulkanRenderBackend extends RenderBackend {
     }
 
     @Override
-    public int createShader(int type) {
-        return nextId();
-    }
-
-    @Override
-    public void deleteShader(int shader) {}
-
-    @Override
-    public void shaderSource(int shader, CharSequence source) {}
-
-    @Override
-    public void compileShader(int shader) {}
-
-    @Override
-    public int createProgram() {
-        return nextId();
-    }
-
-    @Override
-    public void deleteProgram(int program) {}
-
-    @Override
-    public void attachShader(int program, int shader) {}
-
-    @Override
-    public void detachShader(int program, int shader) {}
-
-    @Override
-    public void linkProgram(int program) {}
-
-    @Override
-    public void useProgram(int program) {}
-
-    @Override
     public void getProgramiv(int program, int pname, IntBuffer params) {}
 
     @Override
@@ -1472,61 +1706,7 @@ public final class VulkanRenderBackend extends RenderBackend {
     }
 
     @Override
-    public void bindAttribLocation(int program, int index, CharSequence name) {}
-
-    @Override
     public void getShaderSource(int shader, IntBuffer length, ByteBuffer source) {}
-
-    @Override
-    public void uniform1i(int location, int v0) {}
-
-    @Override
-    public void uniform1f(int location, float v0) {}
-
-    @Override
-    public void uniform2f(int location, float v0, float v1) {}
-
-    @Override
-    public void uniform2i(int location, int v0, int v1) {}
-
-    @Override
-    public void uniform3f(int location, float v0, float v1, float v2) {}
-
-    @Override
-    public void uniform3i(int location, int v0, int v1, int v2) {}
-
-    @Override
-    public void uniform4f(int location, float v0, float v1, float v2, float v3) {}
-
-    @Override
-    public void uniform4i(int location, int v0, int v1, int v2, int v3) {}
-
-    @Override
-    public void uniform2(int location, FloatBuffer value) {}
-
-    @Override
-    public void uniform3(int location, FloatBuffer value) {}
-
-    @Override
-    public void uniform4(int location, FloatBuffer value) {}
-
-    @Override
-    public void uniform1iv(int location, IntBuffer value) {}
-
-    @Override
-    public void uniform2iv(int location, IntBuffer value) {}
-
-    @Override
-    public void uniform3iv(int location, IntBuffer value) {}
-
-    @Override
-    public void uniform4iv(int location, IntBuffer value) {}
-
-    @Override
-    public void uniformMatrix3(int location, boolean transpose, FloatBuffer value) {}
-
-    @Override
-    public void uniformMatrix4(int location, boolean transpose, FloatBuffer value) {}
 
     @Override
     public void vertexAttrib2f(int index, float v0, float v1) {}
@@ -1542,9 +1722,6 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     public void bindBufferRange(int target, int index, int buffer, long offset, long size) {}
-
-    @Override
-    public void uniformBlockBinding(int program, int blockIndex, int binding) {}
 
     @Override
     public int getIndexedBufferBinding(int target, int index) {

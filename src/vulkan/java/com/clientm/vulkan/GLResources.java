@@ -87,6 +87,8 @@ final class GLResources {
         int drawFramebuffer, readFramebuffer;
         float clearR, clearG, clearB, clearA, clearDepth = 1f;
         int clearStencil;
+        /** The program in use (glUseProgram). */
+        int program;
     }
 
     private final ThreadLocal<Ctx> context = ThreadLocal.withInitial(Ctx::new);

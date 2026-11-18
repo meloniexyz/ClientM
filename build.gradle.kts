@@ -43,6 +43,10 @@ dependencies {
     "vulkanCompileOnly"("org.lwjgl:lwjgl:3.4.2")
     "vulkanCompileOnly"("org.lwjgl:lwjgl-vulkan:3.4.2")
     "vulkanCompileOnly"("org.lwjgl:lwjgl-sdl:3.4.2")
+    "vulkanCompileOnly"("org.lwjgl:lwjgl-shaderc:3.4.2")
+    "vulkanCompileOnly"("org.lwjgl:lwjgl-spvc:3.4.2")
+    // Angelica's records are compiled down to Java 8 and extend this library's Record stand-in.
+    "vulkanCompileOnly"("xyz.wagyourtail.jvmdowngrader:jvmdowngrader-java-api:1.3.5:downgraded-8")
     "vulkanCompileOnly"("org.apache.logging.log4j:log4j-api:2.0-beta9")
     // Vulkan's Java bindings for the Java 21/25 dev launches; on Windows they use the system's vulkan-1.dll.
     "lwjgl3Classpath"("org.lwjgl:lwjgl-vulkan:3.4.2")
