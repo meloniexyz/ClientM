@@ -23,6 +23,8 @@ final class VulkanImage {
 
     final int width, height, levels, format, aspect;
     final boolean depth;
+    /** An upload into this image is queued and not recorded yet (see GLResources.flushUploads). */
+    boolean pendingUpload;
     long image, memory, view;
     /** One view per mip level, for drawing into a single level. */
     long[] levelViews;

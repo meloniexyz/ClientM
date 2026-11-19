@@ -12,6 +12,9 @@ final class Stats {
     /** Per frame, for explaining slow frames. */
     static long fPipelines, fImages, fBuffers, fStaged, fUploads, fFlushes, fFenceNs, fAcquireNs, fPresentNs, fSubmitNs;
     private static long lastFrameNs, spikes;
+    /** Time spent in this frame creating pipelines and images. */
+    static long fPipelineNs, fImageNs, fUploadFlushes;
+    static String fWhat = "";
 
     private Stats() {}
 
@@ -44,6 +47,12 @@ final class Stats {
                 fStaged,
                 fUploads,
                 fFlushes);
+            if (b == 1 && ms > 8 && spikes <= 60) LOG.info(
+                "  in it: pipeline creation {} ms, image creation {} ms, upload flushes {},{}",
+                fPipelineNs / 1e6,
+                fImageNs / 1e6,
+                fUploadFlushes,
+                fWhat);
         }
         if (wasBenching && !benching) {
             String[] names = { "frame ms", "fence ms", "acquire ms", "submit ms", "present ms", "pipelines", "images",
@@ -58,6 +67,8 @@ final class Stats {
         }
         wasBenching = benching;
         fPipelines = fImages = fBuffers = fStaged = fUploads = fFlushes = fFenceNs = fAcquireNs = fPresentNs = fSubmitNs = 0;
+        fPipelineNs = fImageNs = fUploadFlushes = 0;
+        fWhat = "";
         if (++frames % 2000 != 0) return;
         double f = 2000.0;
         LOG.info(

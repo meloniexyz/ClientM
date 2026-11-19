@@ -365,6 +365,7 @@ final class VulkanRenderer {
         synchronized (res.lock) {
             if (Stats.ON) Stats.draws++;
             blank(); // created before rendering starts: creating an image ends rendering
+            if (res.hasPendingUploads() && samplesPending(c, p)) res.flushUploads();
             if (!beginRendering(c.drawFramebuffer)) return;
             if (Stats.ON) dev.stamp(
                 "p" + p.id
@@ -571,6 +572,19 @@ final class VulkanRenderer {
 
     /** Attribute arrays become one vertex buffer binding each; inputs without an array read a constant value. */
     private static final java.util.Set<Long> SEEN = new java.util.HashSet<>();
+
+    /** True when this draw would sample an image with a queued upload, which must be recorded first. */
+    private boolean samplesPending(GLResources.Ctx c, VulkanShaders.GLProgram p) {
+        for (int i = 0; i < 2; i++) {
+            for (String name : i == 0 ? p.vsSamplers : p.fsSamplers) {
+                VulkanShaders.Uniform u = p.uniforms.get(name);
+                int unit = u == null ? 0 : Math.max(0, Math.min(GLResources.UNITS - 1, u.unit));
+                GLResources.GLTexture tex = res.textures.get(c.boundTextures[unit]);
+                if (tex != null && tex.image != null && tex.image.pendingUpload) return true;
+            }
+        }
+        return false;
+    }
 
     private boolean bindVertices(VkCommandBuffer cmd, VulkanShaders.GLProgram p, VertexArray vao, RenderState s) {
         long frame = dev.currentFrame();
@@ -875,7 +889,12 @@ final class VulkanRenderer {
         Long cached = pipelines.get(key);
         if (cached != null) return cached;
         if (Stats.ON) Stats.fPipelines++;
+        long t0 = Stats.ON ? System.nanoTime() : 0;
         long created = createPipeline(p, vao, s, mode);
+        if (Stats.ON) {
+            Stats.fPipelineNs += System.nanoTime() - t0;
+            Stats.fWhat += " pipeline(program " + p.id + ")";
+        }
         pipelines.put(key, created);
         return created;
     }

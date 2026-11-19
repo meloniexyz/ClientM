@@ -325,7 +325,12 @@ final class GLResources {
             return;
         synchronized (lock) {
             if (img != null) img.release(dev);
+            long t0 = Stats.ON ? System.nanoTime() : 0;
             t.image = new VulkanImage(dev, width, height, levels, format, depth);
+            if (Stats.ON) {
+                Stats.fImageNs += System.nanoTime() - t0;
+                Stats.fWhat += " image(texture " + t.id + " " + width + "x" + height + "/" + levels + ")";
+            }
             t.internal = internal;
             if (t.history.length() < 300) t.history.append(width)
                 .append('x')
@@ -345,6 +350,53 @@ final class GLResources {
      * Uploads pixels to one level of a texture. The game hands pixels in OpenGL's layouts; they are turned into the
      * image's byte order while staging.
      */
+    // ------------------------------------------------------------------ queued texture uploads
+
+    /** {staging buffer, offset, image, level, x, y, width, height} for each upload not recorded yet. */
+    private final java.util.ArrayList<long[]> pending = new java.util.ArrayList<>();
+    private final java.util.ArrayList<VulkanImage> pendingImages = new java.util.ArrayList<>();
+    private boolean flushing;
+
+    boolean hasPendingUploads() {
+        return !pending.isEmpty();
+    }
+
+    /** Records all queued uploads, between two barriers. Runs before any other recorded transfer (see Barriers). */
+    void flushUploads() {
+        if (pending.isEmpty() || flushing) return;
+        flushing = true;
+        try {
+            VkCommandBuffer cmd = dev.cmd();
+            Barriers.full(cmd);
+            try (MemoryStack stack = stackPush()) {
+                VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
+                for (long[] u : pending) {
+                    final int level = (int) u[3];
+                    region.get(0)
+                        .bufferOffset(u[1])
+                        .imageSubresource(
+                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                .mipLevel(level)
+                                .layerCount(1));
+                    region.get(0)
+                        .imageOffset()
+                        .set((int) u[4], (int) u[5], 0);
+                    region.get(0)
+                        .imageExtent()
+                        .set((int) u[6], (int) u[7], 1);
+                    vkCmdCopyBufferToImage(cmd, u[0], u[2], VK_IMAGE_LAYOUT_GENERAL, region);
+                }
+            }
+            Barriers.full(cmd);
+            if (Stats.ON) Stats.fUploadFlushes++;
+        } finally {
+            pending.clear();
+            for (VulkanImage img : pendingImages) img.pendingUpload = false;
+            pendingImages.clear();
+            flushing = false;
+        }
+    }
+
     void upload(GLTexture t, int level, int x, int y, int width, int height, int glFormat, int glType, long pixels) {
         if (Stats.ON) {
             Stats.uploads++;
@@ -393,25 +445,11 @@ final class GLResources {
                         img.format);
                 }
                 long at = stage(dst, n);
-                VkCommandBuffer cmd = dev.cmd();
-                Barriers.full(cmd);
-                try (MemoryStack stack = stackPush()) {
-                    VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
-                    region.get(0)
-                        .bufferOffset(at)
-                        .imageSubresource(
-                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                .mipLevel(level)
-                                .layerCount(1));
-                    region.get(0)
-                        .imageOffset()
-                        .set(x, y, 0);
-                    region.get(0)
-                        .imageExtent()
-                        .set(width, height, 1);
-                    vkCmdCopyBufferToImage(cmd, staging.buffer, img.image, VK_IMAGE_LAYOUT_GENERAL, region);
-                }
-                Barriers.full(cmd);
+                // Queued: uploads are recorded together the next time drawing stops (or before a draw that
+                // samples this image), instead of each one stopping the drawing in progress.
+                pending.add(new long[] { staging.buffer, at, img.image, level, x, y, width, height });
+                img.pendingUpload = true;
+                pendingImages.add(img);
             } finally {
                 MemoryUtil.memFree(tmp);
             }

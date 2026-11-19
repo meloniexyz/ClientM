@@ -1429,8 +1429,12 @@ public final class VulkanRenderBackend extends RenderBackend {
             if (rendererStore == null) {
                 GLResources r = res();
                 VulkanRenderer created = new VulkanRenderer(r.dev, r, sh());
-                Barriers.outsideRendering = created::endRendering;
-                r.dev.beforeSubmit = created::endRendering;
+                Runnable outside = () -> {
+                    created.endRendering();
+                    r.flushUploads();
+                };
+                Barriers.outsideRendering = outside;
+                r.dev.beforeSubmit = outside;
                 rendererStore = created;
             }
             return rendererStore;

@@ -120,9 +120,129 @@ final class VulkanShaders {
 
     // ------------------------------------------------------------------ shaders
 
+    /**
+     * Compiled shaders kept between launches: translating, compiling and reflecting one takes tens of milliseconds,
+     * which would show as a hitch when the game first needs a shader mid-play. The whole cache is read into memory
+     * once at start-up (opening files mid-frame is slow too), and new entries are written by a background thread.
+     */
+    private static final java.io.File SHADER_CACHE = new java.io.File("clientm-vk-shaders");
+    /** Bump when the translation or patching changes, so old cached code is not used. */
+    private static final String CACHE_VERSION = "1";
+    private static final Map<String, byte[]> CACHED_SPIRV = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<String, byte[]> CACHED_REFLECTION = new java.util.concurrent.ConcurrentHashMap<>();
+    private static volatile boolean cacheLoaded;
+    private static final java.util.concurrent.ExecutorService CACHE_WRITER = java.util.concurrent.Executors
+        .newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "ClientM shader cache writer");
+            t.setDaemon(true);
+            return t;
+        });
+
+    private static void loadCache() {
+        if (cacheLoaded) return;
+        synchronized (CACHED_SPIRV) {
+            if (cacheLoaded) return;
+            java.io.File[] files = SHADER_CACHE.listFiles();
+            int n = 0;
+            if (files != null) for (java.io.File f : files) {
+                String name = f.getName();
+                try {
+                    if (name.endsWith(".spv")) {
+                        CACHED_SPIRV
+                            .put(name.substring(0, name.length() - 4), java.nio.file.Files.readAllBytes(f.toPath()));
+                        n++;
+                    } else if (name.endsWith(".refl")) {
+                        CACHED_REFLECTION
+                            .put(name.substring(0, name.length() - 5), java.nio.file.Files.readAllBytes(f.toPath()));
+                    }
+                } catch (java.io.IOException e) {
+                    LOG.warn("Could not read cached shader {}: {}", name, e.toString());
+                }
+            }
+            if (n > 0) LOG.info("Shader cache loaded: {} shaders", n);
+            cacheLoaded = true;
+        }
+    }
+
+    private static void store(String key, String suffix, byte[] bytes) {
+        CACHE_WRITER.execute(() -> {
+            try {
+                SHADER_CACHE.mkdirs();
+                java.io.File tmp = new java.io.File(SHADER_CACHE, key + suffix + ".tmp");
+                java.nio.file.Files.write(tmp.toPath(), bytes);
+                java.nio.file.Files.move(
+                    tmp.toPath(),
+                    new java.io.File(SHADER_CACHE, key + suffix).toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (Throwable t) {
+                LOG.warn("Could not cache shader {} ({})", key, t.toString());
+            }
+        });
+    }
+
+    private static void storeReflection(String key, ShaderManager.StageReflection r) {
+        try {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            try (java.io.DataOutputStream out = new java.io.DataOutputStream(bytes)) {
+                ReflectionCache.write(out, r);
+            }
+            byte[] data = bytes.toByteArray();
+            CACHED_REFLECTION.put(key, data);
+            store(key, ".refl", data);
+        } catch (Throwable t) {
+            LOG.warn("Could not cache shader reflection {} ({})", key, t.toString());
+        }
+    }
+
+    private static String cacheKey(String raw, int type) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+            md.update((CACHE_VERSION + ":" + type + ":").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            md.update(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : md.digest()) sb.append(Character.forDigit((b >> 4) & 15, 16))
+                .append(Character.forDigit(b & 15, 16));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return null;
+        }
+    }
+
     void compile(GLShader s) {
+        long t0 = System.nanoTime();
+        loadCache();
         String raw = s.source;
-        if (!raw.isEmpty() && raw.charAt(raw.length() - 1) == '\0') raw = raw.substring(0, raw.length() - 1);
+        if (!raw.isEmpty() && raw.charAt(raw.length() - 1) == 0) raw = raw.substring(0, raw.length() - 1);
+        String key = cacheKey(raw, s.type);
+        byte[] cached = key == null ? null : CACHED_SPIRV.get(key);
+        if (cached != null && cached.length >= 20 && cached.length % 4 == 0) {
+            try {
+                if (s.spirv != null) MemoryUtil.memFree(s.spirv);
+                s.spirv = MemoryUtil.memAlloc(cached.length)
+                    .put(cached);
+                s.spirv.flip();
+                s.reflection = null;
+                byte[] refl = CACHED_REFLECTION.get(key);
+                if (refl != null) {
+                    try (java.io.DataInputStream in = new java.io.DataInputStream(
+                        new java.io.ByteArrayInputStream(refl))) {
+                        s.reflection = ReflectionCache.read(in);
+                    } catch (Throwable t) {
+                        s.reflection = null;
+                    }
+                }
+                if (s.reflection == null) {
+                    s.reflection = ShaderManager.reflectStage(s.spirv, s.type == GL_VERTEX_SHADER);
+                    storeReflection(key, s.reflection);
+                }
+                s.compiled = true;
+                s.log = "";
+                if (Stats.ON) Stats.fWhat += " shader-cached(" + (System.nanoTime() - t0) / 1000 + " us)";
+                return;
+            } catch (Throwable t) {
+                LOG.warn("Cached shader {} could not be used ({}); compiling it", key, t.toString());
+            }
+        }
         String translated;
         try {
             translated = ShaderManager.applyPrewarmTransformsFull(raw, s.type, null, null)
@@ -146,6 +266,15 @@ final class VulkanShaders {
         s.reflection = ShaderManager.reflectStage(s.spirv, s.type == GL_VERTEX_SHADER);
         s.compiled = true;
         s.log = "";
+        if (key != null) {
+            byte[] bytes = new byte[s.spirv.remaining()];
+            s.spirv.duplicate()
+                .get(bytes);
+            CACHED_SPIRV.put(key, bytes);
+            store(key, ".spv", bytes);
+            storeReflection(key, s.reflection);
+        }
+        if (Stats.ON) Stats.fWhat += " shader-compiled(" + (System.nanoTime() - t0) / 1000 + " us)";
     }
 
     // ------------------------------------------------------------------ programs
