@@ -104,6 +104,13 @@ final class VulkanDevice {
     /** Called just before a frame is submitted, so open drawing work can be closed. */
     Runnable beforeSubmit = () -> {};
 
+    private GpuTimer timer;
+
+    /** Development aid: marks a point in the frame for the GPU timer (CLIENTM_VK_STATS). */
+    void stamp(String label) {
+        if (timer != null && recording) timer.stamp(commands[slot], slot, label);
+    }
+
     VulkanDevice(long window) {
         this.window = window;
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) deferred[i] = new ArrayList<>();
@@ -458,6 +465,7 @@ final class VulkanDevice {
 
     /** The command buffer of the frame being recorded; starts the frame if needed. */
     VkCommandBuffer cmd() {
+        if (device == null) throw new IllegalStateException("The Vulkan renderer has shut down");
         if (!recording) beginFrame();
         return commands[slot];
     }
@@ -491,8 +499,35 @@ final class VulkanDevice {
         }
     }
 
+    /**
+     * Submits the commands recorded so far in this frame and waits for the graphics card to finish them, then
+     * continues recording the same frame. For the rare reads that need GPU results at once.
+     */
+    void flushAndWait() {
+        if (!recording) return;
+        beforeSubmit.run();
+        VkCommandBuffer cmd = commands[slot];
+        vkEndCommandBuffer(cmd);
+        try (MemoryStack stack = stackPush()) {
+            vkResetFences(device, frameDone[slot]);
+            VkSubmitInfo submit = VkSubmitInfo.calloc(stack)
+                .sType$Default()
+                .pCommandBuffers(stack.pointers(cmd));
+            check(vkQueueSubmit(queue, submit, frameDone[slot]), "submit work");
+            vkWaitForFences(device, frameDone[slot], true, Long.MAX_VALUE);
+            vkResetCommandBuffer(cmd, 0);
+            vkBeginCommandBuffer(
+                cmd,
+                VkCommandBufferBeginInfo.calloc(stack)
+                    .sType$Default()
+                    .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
+        }
+        if (timer != null) timer.begin(cmd, slot);
+    }
+
     /** Runs the action once the graphics card can no longer be using what the current frame used. */
     void later(Runnable action) {
+        if (device == null) return; // shut down: everything is already gone
         if (!recording) beginFrame();
         deferred[slot].add(action);
     }
@@ -517,6 +552,11 @@ final class VulkanDevice {
                     .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
         }
         recording = true;
+        if (Stats.ON) {
+            if (timer == null) timer = new GpuTimer(this, gpu, FRAMES_IN_FLIGHT);
+            timer.begin(commands[slot], slot);
+            timer.stamp(commands[slot], slot, "frame start");
+        }
     }
 
     /**
@@ -546,6 +586,7 @@ final class VulkanDevice {
                     if (acquired == VK_SUCCESS || acquired == VK_SUBOPTIMAL_KHR) index = pIndex.get(0);
                     else needsRebuild = true;
                 }
+                stamp("present blit");
                 if (index >= 0 && screen != null) {
                     Barriers.full(cmd);
                     Barriers.image(
@@ -593,6 +634,7 @@ final class VulkanDevice {
                         VK_IMAGE_LAYOUT_UNDEFINED,
                         KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
                 }
+                stamp("end");
                 vkEndCommandBuffer(cmd);
                 vkResetFences(device, frameDone[f]);
                 VkSubmitInfo submit = VkSubmitInfo.calloc(stack)

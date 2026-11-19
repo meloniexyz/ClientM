@@ -38,8 +38,16 @@ final class VulkanBuffer {
     /** The last frame that recorded GPU work using this buffer. */
     long lastUse;
 
+    /** True for memory on the graphics card that the CPU cannot see (no {@link #address}). */
+    final boolean gpuOnly;
+
     VulkanBuffer(VulkanDevice dev, long size) {
+        this(dev, size, false);
+    }
+
+    VulkanBuffer(VulkanDevice dev, long size, boolean gpuOnly) {
         this.size = Math.max(16, size);
+        this.gpuOnly = gpuOnly;
         VkDevice vk = dev.vk();
         try (MemoryStack stack = stackPush()) {
             VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack)
@@ -56,10 +64,13 @@ final class VulkanBuffer {
             VkMemoryAllocateInfo alloc = VkMemoryAllocateInfo.calloc(stack)
                 .sType$Default()
                 .allocationSize(req.size())
-                .memoryTypeIndex(dev.memoryType(req.memoryTypeBits(), coherent, coherent));
+                .memoryTypeIndex(
+                    gpuOnly ? dev.memoryType(req.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0)
+                        : dev.memoryType(req.memoryTypeBits(), coherent, coherent));
             VulkanDevice.check(vkAllocateMemory(vk, alloc, null, handle), "allocate buffer memory");
             memory = handle.get(0);
             vkBindBufferMemory(vk, buffer, memory, 0);
+            if (gpuOnly) return;
             PointerBuffer pData = stack.mallocPointer(1);
             VulkanDevice.check(vkMapMemory(vk, memory, 0, VK_WHOLE_SIZE, 0, pData), "map buffer memory");
             address = pData.get(0);

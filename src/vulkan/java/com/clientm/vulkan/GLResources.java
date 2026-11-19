@@ -179,13 +179,45 @@ final class GLResources {
 
     /** Gives the buffer new memory of the given size (the old memory is freed once the GPU is done with it). */
     void allocate(GLBuffer b, long size, ByteBuffer data, boolean persistent) {
+        allocate(b, size, data, persistent, false);
+    }
+
+    /**
+     * @param gpuOnly the buffer is only written by uploads and GPU copies, never mapped: it lives in graphics card
+     *                memory, which the GPU reads much faster than system memory. Mapping it later moves it back.
+     */
+    void allocate(GLBuffer b, long size, ByteBuffer data, boolean persistent, boolean gpuOnly) {
         if (b == null) return;
         synchronized (lock) {
             if (b.vk != null) b.vk.release(dev);
-            b.vk = new VulkanBuffer(dev, Math.max(size, 16));
+            b.vk = new VulkanBuffer(dev, Math.max(size, 16), gpuOnly && !persistent);
             b.persistent = persistent;
-            if (data != null)
-                MemoryUtil.memCopy(MemoryUtil.memAddress(data), b.vk.address, Math.min(size, data.remaining()));
+            if (data != null) {
+                if (b.vk.gpuOnly) write(b, 0, data);
+                else MemoryUtil.memCopy(MemoryUtil.memAddress(data), b.vk.address, Math.min(size, data.remaining()));
+            }
+        }
+    }
+
+    /** Moves a graphics-card-only buffer to CPU-visible memory, with its contents (waits for the GPU). */
+    void toHost(GLBuffer b) {
+        if (b == null || b.vk == null || !b.vk.gpuOnly) return;
+        synchronized (lock) {
+            VulkanBuffer old = b.vk;
+            VulkanBuffer host = new VulkanBuffer(dev, old.size);
+            VkCommandBuffer cmd = dev.cmd();
+            Barriers.full(cmd);
+            try (MemoryStack stack = stackPush()) {
+                VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
+                region.get(0)
+                    .size(old.size);
+                vkCmdCopyBuffer(cmd, old.buffer, host.buffer, region);
+            }
+            Barriers.full(cmd);
+            dev.flushAndWait();
+            old.release(dev);
+            b.vk = host;
+            host.lastUse = 0;
         }
     }
 
@@ -195,11 +227,12 @@ final class GLResources {
         long n = Math.min(data.remaining(), b.vk.size - offset);
         if (n <= 0) return;
         synchronized (lock) {
-            if (!inUse(b.vk) && b.vk.lastUse != dev.currentFrame()) {
+            if (!b.vk.gpuOnly && !inUse(b.vk) && b.vk.lastUse != dev.currentFrame()) {
                 MemoryUtil.memCopy(MemoryUtil.memAddress(data), b.vk.address + offset, n);
                 return;
             }
             // Still in use: the new data goes in through a copy on the GPU, in order with the frame's work.
+            if (Stats.ON) Stats.stagedWrites++;
             long src = stage(MemoryUtil.memAddress(data), n);
             VkCommandBuffer cmd = dev.cmd();
             Barriers.full(cmd);
@@ -218,6 +251,7 @@ final class GLResources {
 
     void copy(GLBuffer from, GLBuffer to, long readOffset, long writeOffset, long size) {
         if (from == null || to == null || from.vk == null || to.vk == null || size <= 0) return;
+        if (Stats.ON) Stats.bufferCopies++;
         synchronized (lock) {
             VkCommandBuffer cmd = dev.cmd();
             Barriers.full(cmd);
@@ -307,6 +341,7 @@ final class GLResources {
      * image's byte order while staging.
      */
     void upload(GLTexture t, int level, int x, int y, int width, int height, int glFormat, int glType, long pixels) {
+        if (Stats.ON) Stats.uploads++;
         VulkanImage img = t.image;
         if (img == null || pixels == 0 || width <= 0 || height <= 0 || img.depth) return;
         int lw = Math.max(1, img.width >> level), lh = Math.max(1, img.height >> level);

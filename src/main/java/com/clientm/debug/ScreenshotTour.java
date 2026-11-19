@@ -31,6 +31,25 @@ public final class ScreenshotTour {
         .startsWith("bench") ? 400 : 140;
     private ClientScreen screen;
 
+    /**
+     * CLIENTM_WINDOW_DISPLAY=x,y (a point on another monitor, in desktop coordinates): the test window is created there
+     * and made fullscreen, so test runs use the whole screen without covering the main monitor.
+     */
+    private void toTestDisplay() {
+        String where = System.getenv("CLIENTM_WINDOW_DISPLAY");
+        if (where == null || mc.isFullScreen()) return;
+        try {
+            // Borderless, so clicking on the other monitor does not minimise the game.
+            module("borderless").setEnabled(true);
+            com.clientm.module.impl.BorderlessFullscreenModule.sync();
+            // The window was already created on that monitor (com.clientm.vulkan.TestWindow); fullscreen stays there.
+            mc.toggleFullscreen();
+            ClientM.LOG.info("Test window moved to {} and made fullscreen", where);
+        } catch (Throwable t) {
+            ClientM.LOG.error("Could not move the test window", t);
+        }
+    }
+
     public static boolean requested() {
         return System.getenv("CLIENTM_TOUR") != null;
     }
@@ -52,6 +71,7 @@ public final class ScreenshotTour {
                     accountsTour();
                     return;
                 }
+                if (menuTicks == 0) toTestDisplay();
                 // Give the title screen a moment to draw, photograph it, then load the world.
                 if (++menuTicks == 30) shot("00-main-menu");
                 if (menuTicks > 34) launchFirstWorld();

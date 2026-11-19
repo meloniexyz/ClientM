@@ -144,6 +144,7 @@ final class VulkanRenderer {
     void endRendering() {
         if (rendering) {
             vkCmdEndRendering(dev.cmd());
+            if (Stats.ON) dev.stamp("between passes");
             rendering = false;
             targetKey = 0;
         }
@@ -232,6 +233,7 @@ final class VulkanRenderer {
         if (t == null) return false;
         if (rendering && t.key == targetKey) return true;
         endRendering();
+        if (Stats.ON) Stats.begins++;
         VkCommandBuffer cmd = dev.cmd();
         Barriers.full(cmd);
         try (MemoryStack stack = stackPush()) {
@@ -261,7 +263,11 @@ final class VulkanRenderer {
                 info.pDepthAttachment(depth);
                 if (Formats.hasStencil(t.depth.format)) info.pStencilAttachment(depth);
             }
+            if (Stats.ON) dev.stamp("pass begin barrier");
             vkCmdBeginRendering(cmd, info);
+            if (Stats.ON) dev.stamp(
+                framebuffer == 0 ? "pass screen"
+                    : "pass fb " + t.width + "x" + t.height + (t.depth != null ? "+depth" : ""));
         }
         rendering = true;
         targetKey = t.key;
@@ -279,6 +285,7 @@ final class VulkanRenderer {
     /** glClear on a framebuffer: cleared inside rendering, limited to the scissor box like OpenGL. */
     void clear(GLResources.Ctx c, int mask) {
         synchronized (res.lock) {
+            if (Stats.ON) Stats.clears++;
             clearLocked(c, mask);
         }
     }
@@ -356,8 +363,13 @@ final class VulkanRenderer {
         VertexArray vao = vaos.get(c.vao);
         if (vao == null) return;
         synchronized (res.lock) {
+            if (Stats.ON) Stats.draws++;
             blank(); // created before rendering starts: creating an image ends rendering
             if (!beginRendering(c.drawFramebuffer)) return;
+            if (Stats.ON) dev.stamp(
+                "p" + p.id
+                    + (kind == DRAW_INDIRECT ? " indirect" : kind == DRAW_ELEMENTS ? " elements" : " arrays")
+                    + (c.state.blend ? " blend" : ""));
             VkCommandBuffer cmd = dev.cmd();
             RenderState s = c.state;
             long pipeline = pipeline(p, vao, s, mode);
@@ -558,9 +570,29 @@ final class VulkanRenderer {
     }
 
     /** Attribute arrays become one vertex buffer binding each; inputs without an array read a constant value. */
+    private static final java.util.Set<Long> SEEN = new java.util.HashSet<>();
+
     private boolean bindVertices(VkCommandBuffer cmd, VulkanShaders.GLProgram p, VertexArray vao, RenderState s) {
         long frame = dev.currentFrame();
         try (MemoryStack stack = stackPush()) {
+            if (Stats.ON && SEEN.add(-(long) p.id)) {
+                StringBuilder sb = new StringBuilder();
+                for (int loc : p.attribLocations.values()) if (loc >= 0 && loc < 16) sb.append(' ')
+                    .append(loc)
+                    .append(
+                        vao.enabled[loc]
+                            ? ":" + Integer.toHexString(vao.type[loc])
+                                + "x"
+                                + vao.size[loc]
+                                + (vao.normalized[loc] ? "n" : "")
+                                + (vao.integer[loc] ? "i" : "")
+                                + " s"
+                                + vao.stride[loc]
+                                + " o"
+                                + vao.offset[loc]
+                            : ":const");
+                LOG.info("program {} vertex inputs{}", p.id, sb);
+            }
             for (int loc : p.attribLocations.values()) {
                 if (loc < 0 || loc >= 16) continue;
                 long buffer, offset, stride;
@@ -657,6 +689,21 @@ final class VulkanRenderer {
         int unit = u == null ? 0 : Math.max(0, Math.min(GLResources.UNITS - 1, u.unit));
         GLResources.GLTexture tex = res.textures.get(c.boundTextures[unit]);
         if (tex == null || tex.image == null) tex = blank();
+        if (Stats.ON && SEEN.add(p.id * 100000L + tex.id)) LOG.info(
+            "program {} samples {} with texture {}: {}x{} levels {} min {} mag {} aniso {} maxLevel {} maxLod {} wrap {}/{}",
+            p.id,
+            name,
+            tex.id,
+            tex.image.width,
+            tex.image.height,
+            tex.image.levels,
+            Integer.toHexString(tex.minFilter),
+            Integer.toHexString(tex.magFilter),
+            tex.anisotropy,
+            tex.maxLevel,
+            tex.maxLod,
+            Integer.toHexString(tex.wrapS),
+            Integer.toHexString(tex.wrapT));
         VkDescriptorImageInfo.Buffer image = VkDescriptorImageInfo.calloc(1, stack);
         image.get(0)
             .sampler(sampler(tex))

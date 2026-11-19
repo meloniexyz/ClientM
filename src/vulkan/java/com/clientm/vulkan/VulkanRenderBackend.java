@@ -421,6 +421,7 @@ public final class VulkanRenderBackend extends RenderBackend {
             v.captureBeforePresent();
             r.dev.endFrame(r.screenColor);
             v.captureAfterPresent();
+            if (Stats.ON) Stats.frame();
         }
     }
 
@@ -487,39 +488,40 @@ public final class VulkanRenderBackend extends RenderBackend {
             .memByteBuffer(org.lwjgl.system.MemoryUtil.memAddress(data), data.remaining() * size);
     }
 
-    private void data(GLResources.GLBuffer b, long size, java.nio.Buffer data) {
+    private void data(GLResources.GLBuffer b, long size, java.nio.Buffer data, int usage) {
         ByteBuffer bb = bytes(data);
-        res().allocate(b, data == null ? size : bb.remaining(), bb, false);
+        // GL_STATIC_DRAW: written once, drawn many times; kept in graphics card memory.
+        res().allocate(b, data == null ? size : bb.remaining(), bb, false, usage == 0x88E4);
     }
 
     @Override
     public void bufferData(int target, long size, int usage) {
-        data(res().bufferAt(target), size, null);
+        data(res().bufferAt(target), size, null, usage);
     }
 
     @Override
     public void bufferData(int target, ByteBuffer data, int usage) {
-        data(res().bufferAt(target), 0, data);
+        data(res().bufferAt(target), 0, data, usage);
     }
 
     @Override
     public void bufferData(int target, FloatBuffer data, int usage) {
-        data(res().bufferAt(target), 0, data);
+        data(res().bufferAt(target), 0, data, usage);
     }
 
     @Override
     public void bufferData(int target, IntBuffer data, int usage) {
-        data(res().bufferAt(target), 0, data);
+        data(res().bufferAt(target), 0, data, usage);
     }
 
     @Override
     public void bufferData(int target, ShortBuffer data, int usage) {
-        data(res().bufferAt(target), 0, data);
+        data(res().bufferAt(target), 0, data, usage);
     }
 
     @Override
     public void bufferData(int target, DoubleBuffer data, int usage) {
-        data(res().bufferAt(target), 0, data);
+        data(res().bufferAt(target), 0, data, usage);
     }
 
     @Override
@@ -527,7 +529,7 @@ public final class VulkanRenderBackend extends RenderBackend {
         IntBuffer copy = org.lwjgl.BufferUtils.createIntBuffer(data.length);
         copy.put(data)
             .flip();
-        data(res().bufferAt(target), 0, copy);
+        data(res().bufferAt(target), 0, copy, usage);
     }
 
     @Override
@@ -535,32 +537,33 @@ public final class VulkanRenderBackend extends RenderBackend {
         FloatBuffer copy = org.lwjgl.BufferUtils.createFloatBuffer(data.length);
         copy.put(data)
             .flip();
-        data(res().bufferAt(target), 0, copy);
+        data(res().bufferAt(target), 0, copy, usage);
     }
 
     @Override
     public void bufferStorage(int target, long size, int flags) {
-        res().allocate(res().bufferAt(target), size, null, true);
+        // Storage the CPU never maps lives in graphics card memory.
+        res().allocate(res().bufferAt(target), size, null, (flags & 0x3) != 0, (flags & 0x3) == 0);
     }
 
     @Override
     public void bufferStorage(int target, ByteBuffer data, int flags) {
-        res().allocate(res().bufferAt(target), data.remaining(), data, true);
+        res().allocate(res().bufferAt(target), data.remaining(), data, (flags & 0x3) != 0, (flags & 0x3) == 0);
     }
 
     @Override
     public void namedBufferData(int buffer, long size, int usage) {
-        data(res().buffer(buffer), size, null);
+        data(res().buffer(buffer), size, null, usage);
     }
 
     @Override
     public void namedBufferData(int buffer, ByteBuffer data, int usage) {
-        data(res().buffer(buffer), 0, data);
+        data(res().buffer(buffer), 0, data, usage);
     }
 
     @Override
     public void namedBufferData(int buffer, FloatBuffer data, int usage) {
-        data(res().buffer(buffer), 0, data);
+        data(res().buffer(buffer), 0, data, usage);
     }
 
     @Override
@@ -607,6 +610,7 @@ public final class VulkanRenderBackend extends RenderBackend {
         if (b == null) return null;
         GLResources r = res();
         if (b.vk == null) r.allocate(b, Math.max(16, offset + length), null, false);
+        r.toHost(b);
         boolean invalidate = (access & 0x0004) != 0 || (access & 0x0008) != 0; // INVALIDATE_RANGE / _BUFFER
         boolean unsynchronized = (access & 0x0020) != 0 || (access & 0x0040) != 0 || b.persistent;
         if (!unsynchronized && r.inUse(b.vk)) {
@@ -643,6 +647,7 @@ public final class VulkanRenderBackend extends RenderBackend {
     private void readBack(int target, long offset, java.nio.Buffer data) {
         GLResources.GLBuffer b = res().bufferAt(target);
         if (b == null || b.vk == null) return;
+        res().toHost(b);
         if (b.vk.lastUse != 0) res().dev.waitFor(b.vk.lastUse);
         ByteBuffer out = bytes(data);
         long n = Math.min(out.remaining(), b.vk.size - offset);
@@ -794,7 +799,9 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     private long unpackAddress(long offset) {
         GLResources.GLBuffer pbo = res().bufferAt(0x88EC);
-        return pbo == null || pbo.vk == null ? 0 : pbo.vk.address + offset;
+        if (pbo == null || pbo.vk == null) return 0;
+        res().toHost(pbo);
+        return pbo.vk.address + offset;
     }
 
     private static long address(java.nio.Buffer b) {

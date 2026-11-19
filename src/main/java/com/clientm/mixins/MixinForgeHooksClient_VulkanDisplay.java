@@ -24,6 +24,13 @@ public abstract class MixinForgeHooksClient_VulkanDisplay {
     @Inject(method = "createDisplay", at = @At("HEAD"), cancellable = true, require = 0)
     private static void clientm$vulkanWindow(CallbackInfo ci) {
         try {
+            Class.forName("com.clientm.vulkan.TestWindow")
+                .getMethod("place")
+                .invoke(null);
+        } catch (Throwable ignored) {
+            // Not an LWJGL 3 launch, or no test placement asked for.
+        }
+        try {
             Class<?> gate = Class.forName("com.clientm.vulkan.VulkanGate");
             if (!(Boolean) gate.getMethod("requested")
                 .invoke(null)) return;
