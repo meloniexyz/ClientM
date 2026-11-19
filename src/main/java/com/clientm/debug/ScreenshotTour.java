@@ -360,6 +360,7 @@ public final class ScreenshotTour {
 
     private void finishBench(float secs) {
         benching = false;
+        System.clearProperty("clientm.benching");
         int[] sorted = java.util.Arrays.copyOf(frameNanos, frames);
         java.util.Arrays.sort(sorted);
         String line = String.format(
@@ -646,6 +647,7 @@ public final class ScreenshotTour {
             spawnFighters();
             spawnMobs();
             benching = true;
+            System.setProperty("clientm.benching", "1");
             return;
         }
         if ("bench".equals(System.getenv("CLIENTM_TOUR")) || FLY) {
@@ -668,6 +670,7 @@ public final class ScreenshotTour {
                 }
             }
             benching = true;
+            System.setProperty("clientm.benching", "1");
             return;
         }
         if ("diag".equals(System.getenv("CLIENTM_TOUR"))) {

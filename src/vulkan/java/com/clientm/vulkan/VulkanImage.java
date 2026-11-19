@@ -37,6 +37,7 @@ final class VulkanImage {
         this.depth = depth;
         this.aspect = depth ? (Formats.hasStencil(format) ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
             : VK_IMAGE_ASPECT_DEPTH_BIT) : VK_IMAGE_ASPECT_COLOR_BIT;
+        if (Stats.ON) Stats.fImages++;
         VkDevice vk = dev.vk();
         try (MemoryStack stack = stackPush()) {
             int usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT

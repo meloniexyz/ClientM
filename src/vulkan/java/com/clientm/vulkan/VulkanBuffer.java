@@ -45,14 +45,60 @@ final class VulkanBuffer {
         this(dev, size, false);
     }
 
+    /** Bytes actually allocated (small CPU-visible buffers are rounded up to a size class and recycled). */
+    final long capacity;
+
+    // Recycled small CPU-visible buffers by size class (256 B << i): {buffer, memory, address}. Device lock held.
+    private static final int CLASSES = 13; // up to 1 MB
+    @SuppressWarnings("unchecked")
+    private static final java.util.ArrayDeque<long[]>[] POOL = new java.util.ArrayDeque[CLASSES];
+    static {
+        for (int i = 0; i < CLASSES; i++) POOL[i] = new java.util.ArrayDeque<>();
+    }
+
+    private static int sizeClass(long size) {
+        int c = 0;
+        while (c < CLASSES && (256L << c) < size) c++;
+        return c; // CLASSES means "too big to pool"
+    }
+
+    /** A buffer for the game's data: small CPU-visible ones come from the recycling pool when possible. */
+    static VulkanBuffer obtain(VulkanDevice dev, long size, boolean gpuOnly) {
+        size = Math.max(16, size);
+        if (!gpuOnly) {
+            int c = sizeClass(size);
+            if (c < CLASSES) {
+                long[] h = POOL[c].poll();
+                if (h != null) return new VulkanBuffer(size, 256L << c, h);
+                return new VulkanBuffer(dev, size, 256L << c, false);
+            }
+        }
+        return new VulkanBuffer(dev, size, size, gpuOnly);
+    }
+
+    private VulkanBuffer(long size, long capacity, long[] handles) {
+        this.size = size;
+        this.capacity = capacity;
+        this.gpuOnly = false;
+        buffer = handles[0];
+        memory = handles[1];
+        address = handles[2];
+    }
+
     VulkanBuffer(VulkanDevice dev, long size, boolean gpuOnly) {
+        this(dev, size, Math.max(16, size), gpuOnly);
+    }
+
+    private VulkanBuffer(VulkanDevice dev, long size, long capacity, boolean gpuOnly) {
         this.size = Math.max(16, size);
+        this.capacity = Math.max(this.size, capacity);
         this.gpuOnly = gpuOnly;
+        if (Stats.ON) Stats.fBuffers++;
         VkDevice vk = dev.vk();
         try (MemoryStack stack = stackPush()) {
             VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack)
                 .sType$Default()
-                .size(this.size)
+                .size(this.capacity)
                 .usage(USAGE)
                 .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
             LongBuffer handle = stack.mallocLong(1);
@@ -82,8 +128,20 @@ final class VulkanBuffer {
     }
 
     void release(VulkanDevice dev) {
-        final long b = buffer, m = memory;
+        final long b = buffer, m = memory, a = address;
         buffer = memory = address = 0;
+        int c = gpuOnly ? CLASSES : sizeClass(capacity);
+        if (c < CLASSES && (256L << c) == capacity) {
+            // Back to the pool once the GPU is done with it.
+            dev.later(() -> {
+                if (POOL[c].size() < 64) POOL[c].add(new long[] { b, m, a });
+                else {
+                    vkDestroyBuffer(dev.vk(), b, null);
+                    vkFreeMemory(dev.vk(), m, null);
+                }
+            });
+            return;
+        }
         dev.later(() -> {
             VkDevice vk = dev.vk();
             vkDestroyBuffer(vk, b, null);

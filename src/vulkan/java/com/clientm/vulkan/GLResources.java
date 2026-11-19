@@ -190,7 +190,9 @@ final class GLResources {
         if (b == null) return;
         synchronized (lock) {
             if (b.vk != null) b.vk.release(dev);
-            b.vk = new VulkanBuffer(dev, Math.max(size, 16), gpuOnly && !persistent);
+            // Small buffers (such as Celeritas' per-region draw command lists, re-specified often) stay CPU-visible:
+            // filling them is a plain copy, with no GPU copy breaking up the frame's drawing.
+            b.vk = VulkanBuffer.obtain(dev, Math.max(size, 16), gpuOnly && !persistent && size >= (256 << 10));
             b.persistent = persistent;
             if (data != null) {
                 if (b.vk.gpuOnly) write(b, 0, data);
@@ -232,7 +234,10 @@ final class GLResources {
                 return;
             }
             // Still in use: the new data goes in through a copy on the GPU, in order with the frame's work.
-            if (Stats.ON) Stats.stagedWrites++;
+            if (Stats.ON) {
+                Stats.stagedWrites++;
+                Stats.fStaged++;
+            }
             long src = stage(MemoryUtil.memAddress(data), n);
             VkCommandBuffer cmd = dev.cmd();
             Barriers.full(cmd);
@@ -341,7 +346,10 @@ final class GLResources {
      * image's byte order while staging.
      */
     void upload(GLTexture t, int level, int x, int y, int width, int height, int glFormat, int glType, long pixels) {
-        if (Stats.ON) Stats.uploads++;
+        if (Stats.ON) {
+            Stats.uploads++;
+            Stats.fUploads++;
+        }
         VulkanImage img = t.image;
         if (img == null || pixels == 0 || width <= 0 || height <= 0 || img.depth) return;
         int lw = Math.max(1, img.width >> level), lh = Math.max(1, img.height >> level);

@@ -16,6 +16,7 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.sdl.SDLVideo;
 import org.lwjgl.sdl.SDLVulkan;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.KHRPushDescriptor;
 import org.lwjgl.vulkan.KHRSwapchain;
 import org.lwjgl.vulkan.VK13;
@@ -147,6 +148,7 @@ final class VulkanDevice {
             createCommands(stack);
         }
         vkGetPhysicalDeviceMemoryProperties(gpu, memory);
+        createPipelineCache();
         createSwapchain();
         LOG.info(
             "Vulkan ready on {}: {}x{}, {} swapchain images, present mode {}",
@@ -505,6 +507,7 @@ final class VulkanDevice {
      */
     void flushAndWait() {
         if (!recording) return;
+        if (Stats.ON) Stats.fFlushes++;
         beforeSubmit.run();
         VkCommandBuffer cmd = commands[slot];
         vkEndCommandBuffer(cmd);
@@ -534,7 +537,9 @@ final class VulkanDevice {
 
     private void beginFrame() {
         slot = (int) (frameNumber % FRAMES_IN_FLIGHT);
+        long t0 = Stats.ON ? System.nanoTime() : 0;
         vkWaitForFences(device, frameDone[slot], true, Long.MAX_VALUE);
+        if (Stats.ON) Stats.fFenceNs += System.nanoTime() - t0;
         completedFrame = Math.max(completedFrame, slotFrame[slot]);
         List<Runnable> work = deferred[slot];
         if (!work.isEmpty()) {
@@ -576,6 +581,7 @@ final class VulkanDevice {
                 }
                 if (!needsRebuild) {
                     IntBuffer pIndex = stack.mallocInt(1);
+                    long ta = Stats.ON ? System.nanoTime() : 0;
                     int acquired = vkAcquireNextImageKHR(
                         device,
                         swapchain,
@@ -583,6 +589,7 @@ final class VulkanDevice {
                         imageReady[f],
                         VK_NULL_HANDLE,
                         pIndex);
+                    if (Stats.ON) Stats.fAcquireNs += System.nanoTime() - ta;
                     if (acquired == VK_SUCCESS || acquired == VK_SUBOPTIMAL_KHR) index = pIndex.get(0);
                     else needsRebuild = true;
                 }
@@ -646,8 +653,11 @@ final class VulkanDevice {
                         .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
                         .pSignalSemaphores(stack.longs(renderDone[index]));
                 }
+                long ts = Stats.ON ? System.nanoTime() : 0;
                 check(vkQueueSubmit(queue, submit, frameDone[f]), "submit a frame");
+                if (Stats.ON) Stats.fSubmitNs += System.nanoTime() - ts;
                 if (index >= 0) {
+                    long tp = Stats.ON ? System.nanoTime() : 0;
                     int presented = vkQueuePresentKHR(
                         queue,
                         VkPresentInfoKHR.calloc(stack)
@@ -656,6 +666,7 @@ final class VulkanDevice {
                             .swapchainCount(1)
                             .pSwapchains(stack.longs(swapchain))
                             .pImageIndices(stack.ints(index)));
+                    if (Stats.ON) Stats.fPresentNs += System.nanoTime() - tp;
                     if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) needsRebuild = true;
                     else if (presented != VK_SUCCESS) check(presented, "present a frame");
                 }
@@ -667,9 +678,71 @@ final class VulkanDevice {
         }
     }
 
+    // ------------------------------------------------------------------ pipeline cache
+
+    /** Compiled pipelines kept between launches, so a state seen before costs no compile stutter. */
+    private static final java.io.File CACHE_FILE = new java.io.File("clientm-vk-pipelines.bin");
+    private long pipelineCache;
+
+    long pipelineCache() {
+        return pipelineCache;
+    }
+
+    private void createPipelineCache() {
+        byte[] saved = null;
+        try {
+            if (CACHE_FILE.isFile()) saved = java.nio.file.Files.readAllBytes(CACHE_FILE.toPath());
+        } catch (java.io.IOException e) {
+            LOG.warn("Could not read the pipeline cache: {}", e.toString());
+        }
+        java.nio.ByteBuffer data = saved == null ? null
+            : MemoryUtil.memAlloc(saved.length)
+                .put(saved);
+        if (data != null) data.flip();
+        try (MemoryStack stack = stackPush()) {
+            org.lwjgl.vulkan.VkPipelineCacheCreateInfo info = org.lwjgl.vulkan.VkPipelineCacheCreateInfo.calloc(stack)
+                .sType$Default()
+                .pInitialData(data);
+            LongBuffer handle = stack.mallocLong(1);
+            // The driver ignores data from another driver or card, so a stale file is harmless.
+            int result = vkCreatePipelineCache(device, info, null, handle);
+            if (result != VK_SUCCESS && data != null) {
+                info.pInitialData(null);
+                result = vkCreatePipelineCache(device, info, null, handle);
+            }
+            pipelineCache = result == VK_SUCCESS ? handle.get(0) : VK_NULL_HANDLE;
+        } finally {
+            if (data != null) MemoryUtil.memFree(data);
+        }
+        if (saved != null) LOG.info("Pipeline cache loaded ({} KB)", saved.length / 1024);
+    }
+
+    private void savePipelineCache() {
+        if (pipelineCache == VK_NULL_HANDLE) return;
+        try (MemoryStack stack = stackPush()) {
+            org.lwjgl.PointerBuffer size = stack.mallocPointer(1);
+            if (vkGetPipelineCacheData(device, pipelineCache, size, null) != VK_SUCCESS || size.get(0) == 0) return;
+            java.nio.ByteBuffer data = MemoryUtil.memAlloc((int) size.get(0));
+            try {
+                if (vkGetPipelineCacheData(device, pipelineCache, size, data) == VK_SUCCESS) {
+                    byte[] bytes = new byte[(int) size.get(0)];
+                    data.get(bytes);
+                    java.nio.file.Files.write(CACHE_FILE.toPath(), bytes);
+                }
+            } finally {
+                MemoryUtil.memFree(data);
+            }
+        } catch (java.io.IOException e) {
+            LOG.warn("Could not save the pipeline cache: {}", e.toString());
+        }
+        vkDestroyPipelineCache(device, pipelineCache, null);
+        pipelineCache = VK_NULL_HANDLE;
+    }
+
     void destroy() {
         if (device != null) {
             vkDeviceWaitIdle(device);
+            savePipelineCache();
             for (List<Runnable> work : deferred) {
                 for (Runnable r : work) r.run();
                 work.clear();

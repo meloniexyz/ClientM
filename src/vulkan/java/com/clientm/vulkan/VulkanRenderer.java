@@ -874,6 +874,7 @@ final class VulkanRenderer {
         PipelineKey key = new PipelineKey(k);
         Long cached = pipelines.get(key);
         if (cached != null) return cached;
+        if (Stats.ON) Stats.fPipelines++;
         long created = createPipeline(p, vao, s, mode);
         pipelines.put(key, created);
         return created;
@@ -1001,7 +1002,7 @@ final class VulkanRenderer {
                 .pDynamicState(dynamic)
                 .layout(p.pipelineLayout);
             LongBuffer handle = stack.mallocLong(1);
-            int result = vkCreateGraphicsPipelines(dev.vk(), VK_NULL_HANDLE, info, null, handle);
+            int result = vkCreateGraphicsPipelines(dev.vk(), dev.pipelineCache(), info, null, handle);
             if (result != VK_SUCCESS) {
                 LOG.error("Could not create a pipeline for program {} (error {})", p.id, result);
                 return 0;
