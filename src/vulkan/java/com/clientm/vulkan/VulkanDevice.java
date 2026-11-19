@@ -111,6 +111,13 @@ final class VulkanDevice {
     private int slot;
     private boolean recording;
 
+    /**
+     * Bumped whenever a fresh command buffer starts recording (a new frame, or after a mid-frame flush). State the
+     * renderer remembers having set (bound pipeline, dynamic state, vertex buffers, descriptors) is only valid within
+     * one epoch.
+     */
+    int epoch;
+
     /** Called just before a frame is submitted, so open drawing work can be closed. */
     Runnable beforeSubmit = () -> {};
 
@@ -568,6 +575,7 @@ final class VulkanDevice {
                     .sType$Default()
                     .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
         }
+        epoch++;
         if (timer != null) timer.begin(cmd, slot);
     }
 
@@ -691,6 +699,7 @@ final class VulkanDevice {
                     .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
         }
         recording = true;
+        epoch++;
         if (Stats.ON) {
             if (timer == null) timer = new GpuTimer(this, gpu, FRAMES_IN_FLIGHT);
             timer.begin(commands[slot], slot);

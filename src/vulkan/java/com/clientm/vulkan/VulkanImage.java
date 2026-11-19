@@ -23,6 +23,9 @@ final class VulkanImage {
 
     final int width, height, levels, format, aspect;
     final boolean depth;
+    /** Bumped whenever an image is created or released: a render target may have changed. */
+    static int generation;
+
     /** An upload into this image is queued and not recorded yet (see GLResources.flushUploads). */
     boolean pendingUpload;
     long image, memory, view;
@@ -53,6 +56,7 @@ final class VulkanImage {
         this.aspect = depth ? (Formats.hasStencil(format) ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
             : VK_IMAGE_ASPECT_DEPTH_BIT) : VK_IMAGE_ASPECT_COLOR_BIT;
         if (Stats.ON) Stats.fImages++;
+        generation++;
         VkDevice vk = dev.vk();
         try (MemoryStack stack = stackPush()) {
             int usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
@@ -115,6 +119,7 @@ final class VulkanImage {
 
     /** Frees the image once the graphics card can no longer be using it. */
     void release(VulkanDevice dev) {
+        generation++;
         final long img = image, mem = memory, v = view, av = attachView;
         final long[] lv = levelViews;
         image = memory = view = 0;

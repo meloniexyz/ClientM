@@ -107,9 +107,9 @@ final class VulkanRenderer {
         int internal;
     }
 
-    final Map<Integer, VertexArray> vaos = new HashMap<>();
-    final Map<Integer, Framebuffer> framebuffers = new HashMap<>();
-    final Map<Integer, Renderbuffer> renderbuffers = new HashMap<>();
+    final IdMap<VertexArray> vaos = new IdMap<>();
+    final IdMap<Framebuffer> framebuffers = new IdMap<>();
+    final IdMap<Renderbuffer> renderbuffers = new IdMap<>();
 
     private final VulkanDevice dev;
     private final GLResources res;
@@ -236,11 +236,24 @@ final class VulkanRenderer {
         return null;
     }
 
+    /** Bumped by the backend whenever a framebuffer's attachments or draw buffers change. */
+    int framebufferEdits;
+    private int renderingFramebuffer = -1, renderingGeneration, renderingEdits;
+
     /** Makes sure rendering into the draw framebuffer is in progress; false when it has nothing to draw into. */
     private boolean beginRendering(int framebuffer) {
+        // Still drawing into the same framebuffer, and no image or attachment has changed since: nothing to do.
+        if (rendering && framebuffer == renderingFramebuffer
+            && renderingGeneration == VulkanImage.generation
+            && renderingEdits == framebufferEdits) return true;
         Target t = target(framebuffer);
         if (t == null) return false;
-        if (rendering && t.key == targetKey) return true;
+        if (rendering && t.key == targetKey) {
+            renderingFramebuffer = framebuffer;
+            renderingGeneration = VulkanImage.generation;
+            renderingEdits = framebufferEdits;
+            return true;
+        }
         endRendering();
         if (Stats.ON) Stats.begins++;
         VkCommandBuffer cmd = dev.cmd();
@@ -287,6 +300,9 @@ final class VulkanRenderer {
         targetDepthFormat = t.depth == null ? VK_FORMAT_UNDEFINED : t.depth.format;
         targetHasStencil = t.depth != null && Formats.hasStencil(t.depth.format);
         targetFlipped = t.flipped;
+        renderingFramebuffer = framebuffer;
+        renderingGeneration = VulkanImage.generation;
+        renderingEdits = framebufferEdits;
         return true;
     }
 
@@ -383,10 +399,15 @@ final class VulkanRenderer {
                     + (kind == DRAW_INDIRECT ? " indirect" : kind == DRAW_ELEMENTS ? " elements" : " arrays")
                     + (c.state.blend ? " blend" : ""));
             VkCommandBuffer cmd = dev.cmd();
+            if (cacheEpoch != dev.epoch) resetCaches();
+            prepare(p);
             RenderState s = c.state;
             long pipeline = pipeline(p, vao, s, mode);
             if (pipeline == 0) return;
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            if (pipeline != boundPipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                boundPipeline = pipeline;
+            }
             dynamicState(cmd, s, mode);
             if (!bindVertices(cmd, p, vao, s)) return;
             descriptors(cmd, c, p);
@@ -444,75 +465,191 @@ final class VulkanRenderer {
         return t == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ? 0 : t <= VK_PRIMITIVE_TOPOLOGY_LINE_STRIP ? 1 : 2;
     }
 
+    // ------------------------------------------------------------------ what this command buffer already has
+
+    /** The command buffer epoch the remembered state below belongs to. */
+    private int cacheEpoch = -1;
+    private long boundPipeline;
+    // dynamic state as last set; Integer.MIN_VALUE / NaN = not set yet
+    private int dsVx, dsVy, dsVw, dsVh, dsSx, dsSy, dsSw, dsSh, dsCull, dsFront, dsTopology, dsDepthCompare;
+    private int dsFlags, dsStencilOps, dsStencilMasks, dsStencilRef;
+    private float dsBiasUnits, dsBiasFactor, dsBlendR, dsBlendG, dsBlendB, dsBlendA;
+    private boolean dsLineWidthSet;
+    // vertex buffer bindings as last set
+    private final long[] vbBuffer = new long[16], vbOffset = new long[16], vbStride = new long[16];
+    // constant attribute values last written to the ring, and where
+    private final float[][] constValues = new float[16][4];
+    private final long[] constOffset = new long[16];
+    private final long[] constBuffer = new long[16];
+    // descriptors as last pushed
+    private VulkanShaders.GLProgram pushedProgram;
+    private final long[] pushed = new long[64], pushing = new long[64];
+    private int pushedLength;
+    private long pushedLayout;
+
+    private void resetCaches() {
+        cacheEpoch = dev.epoch;
+        boundPipeline = 0;
+        dsVx = dsVy = dsVw = dsVh = dsSx = dsSy = dsSw = dsSh = Integer.MIN_VALUE;
+        dsCull = dsFront = dsTopology = dsDepthCompare = dsFlags = Integer.MIN_VALUE;
+        dsStencilOps = dsStencilMasks = dsStencilRef = Integer.MIN_VALUE;
+        dsBiasUnits = dsBiasFactor = Float.NaN;
+        dsBlendR = dsBlendG = dsBlendB = dsBlendA = Float.NaN;
+        dsLineWidthSet = false;
+        Arrays.fill(vbBuffer, -1);
+        Arrays.fill(constBuffer, 0);
+        pushedProgram = null;
+        pushedLength = -1;
+    }
+
+    /** Works out, once per link, what each draw of this program needs: its attribute slots and sampler units. */
+    private static void prepare(VulkanShaders.GLProgram p) {
+        if (p.preparedVersion == p.version) return;
+        int[] locs = new int[p.attribLocations.size()];
+        int n = 0;
+        for (int loc : p.attribLocations.values()) if (loc >= 0 && loc < 16) locs[n++] = loc;
+        p.locations = Arrays.copyOf(locs, n);
+        p.vsSamplerUniforms = new VulkanShaders.Uniform[p.vsSamplers.size()];
+        for (int i = 0; i < p.vsSamplerUniforms.length; i++)
+            p.vsSamplerUniforms[i] = p.uniforms.get(p.vsSamplers.get(i));
+        p.fsSamplerUniforms = new VulkanShaders.Uniform[p.fsSamplers.size()];
+        for (int i = 0; i < p.fsSamplerUniforms.length; i++)
+            p.fsSamplerUniforms[i] = p.uniforms.get(p.fsSamplers.get(i));
+        p.preparedVersion = p.version;
+    }
+
+    /** Sets the dynamic state a draw needs, skipping whatever already has that value in this command buffer. */
     private void dynamicState(VkCommandBuffer cmd, RenderState s, int mode) {
-        try (MemoryStack stack = stackPush()) {
-            VkViewport.Buffer vp = VkViewport.calloc(1, stack);
-            int vw = Math.max(1, s.viewport[2] == 0 ? targetWidth : s.viewport[2]);
-            int vh = Math.max(1, s.viewport[3] == 0 ? targetHeight : s.viewport[3]);
-            vp.get(0)
-                .x(s.viewport[0])
-                .y(targetFlipped ? targetHeight - s.viewport[1] : s.viewport[1])
-                .width(vw)
-                .height(targetFlipped ? -vh : vh)
-                .minDepth(0f)
-                .maxDepth(1f);
-            vkCmdSetViewport(cmd, 0, vp);
-            VkRect2D.Buffer sc = VkRect2D.calloc(1, stack);
-            if (s.scissorTest) {
-                int x = clamp(s.scissor[0], 0, targetWidth), y = clamp(s.scissor[1], 0, targetHeight);
-                int w = clamp(s.scissor[2], 0, targetWidth - x), h = clamp(s.scissor[3], 0, targetHeight - y);
-                if (targetFlipped) y = targetHeight - (y + h);
+        int vw = Math.max(1, s.viewport[2] == 0 ? targetWidth : s.viewport[2]);
+        int vh = Math.max(1, s.viewport[3] == 0 ? targetHeight : s.viewport[3]);
+        int vx = s.viewport[0], vy = targetFlipped ? targetHeight - s.viewport[1] : s.viewport[1];
+        if (targetFlipped) vh = -vh;
+        if (vx != dsVx || vy != dsVy || vw != dsVw || vh != dsVh) {
+            try (MemoryStack stack = stackPush()) {
+                VkViewport.Buffer vp = VkViewport.calloc(1, stack);
+                vp.get(0)
+                    .x(vx)
+                    .y(vy)
+                    .width(vw)
+                    .height(vh)
+                    .minDepth(0f)
+                    .maxDepth(1f);
+                vkCmdSetViewport(cmd, 0, vp);
+            }
+            dsVx = vx;
+            dsVy = vy;
+            dsVw = vw;
+            dsVh = vh;
+        }
+        int sx = 0, sy = 0, sw = targetWidth, sh = targetHeight;
+        if (s.scissorTest) {
+            sx = clamp(s.scissor[0], 0, targetWidth);
+            sy = clamp(s.scissor[1], 0, targetHeight);
+            sw = clamp(s.scissor[2], 0, targetWidth - sx);
+            sh = clamp(s.scissor[3], 0, targetHeight - sy);
+            if (targetFlipped) sy = targetHeight - (sy + sh);
+        }
+        if (sx != dsSx || sy != dsSy || sw != dsSw || sh != dsSh) {
+            try (MemoryStack stack = stackPush()) {
+                VkRect2D.Buffer sc = VkRect2D.calloc(1, stack);
                 sc.get(0)
                     .offset()
-                    .set(x, y);
+                    .set(sx, sy);
                 sc.get(0)
                     .extent()
-                    .set(w, h);
-            } else {
-                sc.get(0)
-                    .extent()
-                    .set(targetWidth, targetHeight);
+                    .set(sw, sh);
+                vkCmdSetScissor(cmd, 0, sc);
             }
-            vkCmdSetScissor(cmd, 0, sc);
+            dsSx = sx;
+            dsSy = sy;
+            dsSw = sw;
+            dsSh = sh;
         }
-        vkCmdSetLineWidth(cmd, 1f);
-        vkCmdSetDepthBiasEnable(cmd, s.polygonOffsetFill);
-        if (s.polygonOffsetFill) vkCmdSetDepthBias(cmd, s.offsetUnits, 0f, s.offsetFactor);
-        vkCmdSetBlendConstants(cmd, s.blendColor);
-        vkCmdSetCullMode(
-            cmd,
-            !s.cullFace ? VK_CULL_MODE_NONE
-                : s.cullMode == 0x0404 ? VK_CULL_MODE_FRONT_BIT
-                    : s.cullMode == 0x0408 ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_BACK_BIT);
+        if (!dsLineWidthSet) {
+            vkCmdSetLineWidth(cmd, 1f);
+            dsLineWidthSet = true;
+        }
+        if (s.polygonOffsetFill && (s.offsetUnits != dsBiasUnits || s.offsetFactor != dsBiasFactor)) {
+            vkCmdSetDepthBias(cmd, s.offsetUnits, 0f, s.offsetFactor);
+            dsBiasUnits = s.offsetUnits;
+            dsBiasFactor = s.offsetFactor;
+        }
+        float[] bc = s.blendColor;
+        if (bc[0] != dsBlendR || bc[1] != dsBlendG || bc[2] != dsBlendB || bc[3] != dsBlendA) {
+            vkCmdSetBlendConstants(cmd, bc);
+            dsBlendR = bc[0];
+            dsBlendG = bc[1];
+            dsBlendB = bc[2];
+            dsBlendA = bc[3];
+        }
+        int cull = !s.cullFace ? VK_CULL_MODE_NONE
+            : s.cullMode == 0x0404 ? VK_CULL_MODE_FRONT_BIT
+                : s.cullMode == 0x0408 ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_BACK_BIT;
+        if (cull != dsCull) {
+            vkCmdSetCullMode(cmd, cull);
+            dsCull = cull;
+        }
         // OpenGL's counter-clockwise front faces look clockwise in Vulkan's framebuffer coordinates.
         // Drawing flipped (into the window's image) turns the winding back again.
-        vkCmdSetFrontFace(
-            cmd,
-            (s.frontFace == 0x0901) != targetFlipped ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
-        vkCmdSetPrimitiveTopology(cmd, topology(mode));
-        vkCmdSetPrimitiveRestartEnable(
-            cmd,
-            s.primitiveRestart && topologyClass(mode) != 0
-                && topology(mode) != VK_PRIMITIVE_TOPOLOGY_LINE_LIST
-                && topology(mode) != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        int front = (s.frontFace == 0x0901) != targetFlipped ? VK_FRONT_FACE_CLOCKWISE
+            : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        if (front != dsFront) {
+            vkCmdSetFrontFace(cmd, front);
+            dsFront = front;
+        }
+        int topology = topology(mode);
+        if (topology != dsTopology) {
+            vkCmdSetPrimitiveTopology(cmd, topology);
+            dsTopology = topology;
+        }
         boolean depth = targetDepthFormat != VK_FORMAT_UNDEFINED;
-        vkCmdSetDepthTestEnable(cmd, depth && s.depthTest);
-        vkCmdSetDepthWriteEnable(cmd, depth && s.depthTest && s.depthMask);
-        vkCmdSetDepthCompareOp(cmd, Math.max(0, Math.min(7, s.depthFunc - 0x0200)));
         boolean stencil = targetHasStencil && s.stencilTest;
-        vkCmdSetStencilTestEnable(cmd, stencil);
+        boolean restart = s.primitiveRestart && topologyClass(mode) != 0
+            && topology != VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+            && topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        int flags = (s.polygonOffsetFill ? 1 : 0) | (restart ? 2 : 0)
+            | (depth && s.depthTest ? 4 : 0)
+            | (depth && s.depthTest && s.depthMask ? 8 : 0)
+            | (stencil ? 16 : 0);
+        if (flags != dsFlags) {
+            int changed = dsFlags == Integer.MIN_VALUE ? -1 : flags ^ dsFlags;
+            if ((changed & 1) != 0) vkCmdSetDepthBiasEnable(cmd, (flags & 1) != 0);
+            if ((changed & 2) != 0) vkCmdSetPrimitiveRestartEnable(cmd, (flags & 2) != 0);
+            if ((changed & 4) != 0) vkCmdSetDepthTestEnable(cmd, (flags & 4) != 0);
+            if ((changed & 8) != 0) vkCmdSetDepthWriteEnable(cmd, (flags & 8) != 0);
+            if ((changed & 16) != 0) vkCmdSetStencilTestEnable(cmd, (flags & 16) != 0);
+            dsFlags = flags;
+        }
+        int compare = Math.max(0, Math.min(7, s.depthFunc - 0x0200));
+        if (compare != dsDepthCompare) {
+            vkCmdSetDepthCompareOp(cmd, compare);
+            dsDepthCompare = compare;
+        }
         if (stencil) {
             int face = VK_STENCIL_FACE_FRONT_AND_BACK;
-            vkCmdSetStencilOp(
-                cmd,
-                face,
-                stencilOp(s.stencilFail),
-                stencilOp(s.stencilPass),
-                stencilOp(s.stencilDepthFail),
-                Math.max(0, Math.min(7, s.stencilFunc - 0x0200)));
-            vkCmdSetStencilCompareMask(cmd, face, s.stencilValueMask);
-            vkCmdSetStencilWriteMask(cmd, face, s.stencilWriteMask);
-            vkCmdSetStencilReference(cmd, face, s.stencilRef);
+            int ops = stencilOp(s.stencilFail) | stencilOp(s.stencilPass) << 4
+                | stencilOp(s.stencilDepthFail) << 8
+                | Math.max(0, Math.min(7, s.stencilFunc - 0x0200)) << 12;
+            if (ops != dsStencilOps) {
+                vkCmdSetStencilOp(
+                    cmd,
+                    face,
+                    stencilOp(s.stencilFail),
+                    stencilOp(s.stencilPass),
+                    stencilOp(s.stencilDepthFail),
+                    Math.max(0, Math.min(7, s.stencilFunc - 0x0200)));
+                dsStencilOps = ops;
+            }
+            int masks = (s.stencilValueMask & 0xFF) | (s.stencilWriteMask & 0xFF) << 8;
+            if (masks != dsStencilMasks) {
+                vkCmdSetStencilCompareMask(cmd, face, s.stencilValueMask);
+                vkCmdSetStencilWriteMask(cmd, face, s.stencilWriteMask);
+                dsStencilMasks = masks;
+            }
+            if (s.stencilRef != dsStencilRef) {
+                vkCmdSetStencilReference(cmd, face, s.stencilRef);
+                dsStencilRef = s.stencilRef;
+            }
         }
     }
 
@@ -606,46 +743,57 @@ final class VulkanRenderer {
 
     private boolean bindVertices(VkCommandBuffer cmd, VulkanShaders.GLProgram p, VertexArray vao, RenderState s) {
         long frame = dev.currentFrame();
-        try (MemoryStack stack = stackPush()) {
-            if (Stats.ON && SEEN.add(-(long) p.id)) {
-                StringBuilder sb = new StringBuilder();
-                for (int loc : p.attribLocations.values()) if (loc >= 0 && loc < 16) sb.append(' ')
-                    .append(loc)
-                    .append(
-                        vao.enabled[loc]
-                            ? ":" + Integer.toHexString(vao.type[loc])
-                                + "x"
-                                + vao.size[loc]
-                                + (vao.normalized[loc] ? "n" : "")
-                                + (vao.integer[loc] ? "i" : "")
-                                + " s"
-                                + vao.stride[loc]
-                                + " o"
-                                + vao.offset[loc]
-                            : ":const");
-                LOG.info("program {} vertex inputs{}", p.id, sb);
-            }
-            for (int loc : p.attribLocations.values()) {
-                if (loc < 0 || loc >= 16) continue;
-                long buffer, offset, stride;
-                if (vao.enabled[loc]) {
-                    GLResources.GLBuffer b = res.buffers.get(vao.buffer[loc]);
-                    if (b == null || b.vk == null) return false;
-                    b.vk.lastUse = frame;
-                    buffer = b.vk.buffer;
-                    offset = vao.offset[loc];
-                    stride = vao.stride[loc] != 0 ? vao.stride[loc]
-                        : (long) Math.max(1, vao.size[loc]) * typeSize(vao.type[loc]);
-                } else {
-                    long at = ringWrite(s.attribValues[loc]);
-                    buffer = ring.buffer;
-                    offset = at;
-                    stride = 0;
+        if (Stats.ON && SEEN.add(-(long) p.id)) logInputs(p, vao);
+        for (int loc : p.locations) {
+            long buffer, offset, stride;
+            if (vao.enabled[loc]) {
+                GLResources.GLBuffer b = res.buffers.get(vao.buffer[loc]);
+                if (b == null || b.vk == null) return false;
+                b.vk.lastUse = frame;
+                buffer = b.vk.buffer;
+                offset = vao.offset[loc];
+                stride = vao.stride[loc] != 0 ? vao.stride[loc]
+                    : (long) Math.max(1, vao.size[loc]) * typeSize(vao.type[loc]);
+            } else {
+                // A constant value: written to the ring once, and reused while it stays the same this frame.
+                float[] v = s.attribValues[loc], last = constValues[loc];
+                if (constBuffer[loc] == 0 || v[0] != last[0] || v[1] != last[1] || v[2] != last[2] || v[3] != last[3]) {
+                    constOffset[loc] = ringWrite(v);
+                    constBuffer[loc] = ring.buffer;
+                    System.arraycopy(v, 0, last, 0, 4);
                 }
+                buffer = constBuffer[loc];
+                offset = constOffset[loc];
+                stride = 0;
+            }
+            if (buffer == vbBuffer[loc] && offset == vbOffset[loc] && stride == vbStride[loc]) continue;
+            try (MemoryStack stack = stackPush()) {
                 vkCmdBindVertexBuffers2(cmd, loc, stack.longs(buffer), stack.longs(offset), null, stack.longs(stride));
             }
+            vbBuffer[loc] = buffer;
+            vbOffset[loc] = offset;
+            vbStride[loc] = stride;
         }
         return true;
+    }
+
+    private void logInputs(VulkanShaders.GLProgram p, VertexArray vao) {
+        StringBuilder sb = new StringBuilder();
+        for (int loc : p.locations) sb.append(' ')
+            .append(loc)
+            .append(
+                vao.enabled[loc]
+                    ? ":" + Integer.toHexString(vao.type[loc])
+                        + "x"
+                        + vao.size[loc]
+                        + (vao.normalized[loc] ? "n" : "")
+                        + (vao.integer[loc] ? "i" : "")
+                        + " s"
+                        + vao.stride[loc]
+                        + " o"
+                        + vao.offset[loc]
+                    : ":const");
+        LOG.info("program {} vertex inputs{}", p.id, sb);
     }
 
     private static int typeSize(int type) {
@@ -699,88 +847,115 @@ final class VulkanRenderer {
 
     // ------------------------------------------------------------------ descriptors
 
+    /**
+     * Pushes the program's textures and value blocks, unless the same program already has exactly these bound in this
+     * command buffer. Value blocks are only copied to the ring again when a uniform changed.
+     */
     private void descriptors(VkCommandBuffer cmd, GLResources.Ctx c, VulkanShaders.GLProgram p) {
-        int count = p.fsUboBinding + 1;
-        try (MemoryStack stack = stackPush()) {
-            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(count, stack);
-            int n = 0;
-            for (int i = 0; i < p.vsSamplers.size(); i++) n = texture(writes, n, i, c, p, p.vsSamplers.get(i), stack);
-            n = values(writes, n, p.vsUboBinding, c, p, true, stack);
-            for (int i = 0; i < p.fsSamplers.size(); i++)
-                n = texture(writes, n, p.fsSamplerBase + i, c, p, p.fsSamplers.get(i), stack);
-            n = values(writes, n, p.fsUboBinding, c, p, false, stack);
-            writes.limit(n);
-            if (n > 0) KHRPushDescriptor
-                .vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.pipelineLayout, 0, writes);
+        long frame = dev.currentFrame();
+        if (p.ringFrame != frame) p.valuesDirty = true; // last frame's ring space is being reused
+        if ((p.vsSamplerUniforms.length + p.fsSamplerUniforms.length) * 2 + 6 > pushing.length) return;
+        int n = 0;
+        for (VulkanShaders.Uniform u : p.vsSamplerUniforms) n = textureEntry(n, c, u);
+        n = valuesEntry(n, c, p, true);
+        for (VulkanShaders.Uniform u : p.fsSamplerUniforms) n = textureEntry(n, c, u);
+        n = valuesEntry(n, c, p, false);
+        p.valuesDirty = false;
+        p.ringFrame = frame;
+        if (p == pushedProgram && p.pipelineLayout == pushedLayout && n == pushedLength) {
+            boolean same = true;
+            for (int i = 0; i < n && same; i++) same = pushing[i] == pushed[i];
+            if (same) return;
         }
+        int writes = p.vsSamplerUniforms.length + p.fsSamplerUniforms.length + 2;
+        try (MemoryStack stack = stackPush()) {
+            VkWriteDescriptorSet.Buffer w = VkWriteDescriptorSet.calloc(writes, stack);
+            int k = 0, e = 0;
+            for (int i = 0; i < p.vsSamplerUniforms.length; i++, e += 2) k = imageWrite(w, k, i, e, stack);
+            if (p.vsUboSize > 0 && pushing[e] != 0) k = bufferWrite(w, k, p.vsUboBinding, e, stack);
+            e += 3;
+            for (int i = 0; i < p.fsSamplerUniforms.length; i++, e += 2)
+                k = imageWrite(w, k, p.fsSamplerBase + i, e, stack);
+            if (p.fsUboSize > 0 && pushing[e] != 0) k = bufferWrite(w, k, p.fsUboBinding, e, stack);
+            w.limit(k);
+            if (k > 0) KHRPushDescriptor
+                .vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p.pipelineLayout, 0, w);
+        }
+        System.arraycopy(pushing, 0, pushed, 0, n);
+        pushedLength = n;
+        pushedProgram = p;
+        pushedLayout = p.pipelineLayout;
     }
 
-    private int texture(VkWriteDescriptorSet.Buffer writes, int n, int binding, GLResources.Ctx c,
-        VulkanShaders.GLProgram p, String name, MemoryStack stack) {
-        VulkanShaders.Uniform u = p.uniforms.get(name);
+    /** Adds {sampler, image view} for a sampler uniform to {@link #pushing}. */
+    private int textureEntry(int n, GLResources.Ctx c, VulkanShaders.Uniform u) {
         int unit = u == null ? 0 : Math.max(0, Math.min(GLResources.UNITS - 1, u.unit));
         GLResources.GLTexture tex = res.textures.get(c.boundTextures[unit]);
         if (tex == null || tex.image == null) tex = blank();
-        if (Stats.ON && SEEN.add(p.id * 100000L + tex.id)) LOG.info(
-            "program {} samples {} with texture {}: {}x{} levels {} min {} mag {} aniso {} maxLevel {} maxLod {} wrap {}/{}",
-            p.id,
-            name,
-            tex.id,
-            tex.image.width,
-            tex.image.height,
-            tex.image.levels,
-            Integer.toHexString(tex.minFilter),
-            Integer.toHexString(tex.magFilter),
-            tex.anisotropy,
-            tex.maxLevel,
-            tex.maxLod,
-            Integer.toHexString(tex.wrapS),
-            Integer.toHexString(tex.wrapT));
+        pushing[n] = sampler(tex);
+        pushing[n + 1] = tex.image.view;
+        return n + 2;
+    }
+
+    /** Adds {buffer, offset, size} for a value block to {@link #pushing} (zeros when the stage has none). */
+    private int valuesEntry(int n, GLResources.Ctx c, VulkanShaders.GLProgram p, boolean vertex) {
+        int size = vertex ? p.vsUboSize : p.fsUboSize;
+        pushing[n] = pushing[n + 1] = pushing[n + 2] = 0;
+        if (size <= 0) return n + 3;
+        if (p.externalUboBinding >= 0 && p.externalUboBinding < c.uboBuffer.length
+            && c.uboBuffer[p.externalUboBinding] != 0) {
+            GLResources.GLBuffer b = res.buffers.get(c.uboBuffer[p.externalUboBinding]);
+            if (b == null || b.vk == null) return n + 3;
+            b.vk.lastUse = dev.currentFrame();
+            long offset = c.uboOffset[p.externalUboBinding];
+            pushing[n] = b.vk.buffer;
+            pushing[n + 1] = offset;
+            pushing[n + 2] = Math.min(size, b.vk.size - offset);
+            return n + 3;
+        }
+        java.nio.ByteBuffer v = vertex ? p.vsValues : p.fsValues;
+        if (v == null) return n + 3;
+        long at = vertex ? p.vsRingOffset : p.fsRingOffset;
+        if (p.valuesDirty || at < 0) {
+            at = ringWrite(v, size);
+            if (vertex) p.vsRingOffset = at;
+            else p.fsRingOffset = at;
+            p.ringBuffer = ring.buffer;
+        }
+        pushing[n] = p.ringBuffer;
+        pushing[n + 1] = at;
+        pushing[n + 2] = size;
+        return n + 3;
+    }
+
+    private int imageWrite(VkWriteDescriptorSet.Buffer w, int k, int binding, int e, MemoryStack stack) {
         VkDescriptorImageInfo.Buffer image = VkDescriptorImageInfo.calloc(1, stack);
         image.get(0)
-            .sampler(sampler(tex))
-            .imageView(tex.image.view)
+            .sampler(pushing[e])
+            .imageView(pushing[e + 1])
             .imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-        writes.get(n)
+        w.get(k)
             .sType$Default()
             .dstBinding(binding)
             .descriptorCount(1)
             .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             .pImageInfo(image);
-        return n + 1;
+        return k + 1;
     }
 
-    private int values(VkWriteDescriptorSet.Buffer writes, int n, int binding, GLResources.Ctx c,
-        VulkanShaders.GLProgram p, boolean vertex, MemoryStack stack) {
-        int size = vertex ? p.vsUboSize : p.fsUboSize;
-        if (size <= 0) return n;
-        long buffer, offset;
-        if (p.externalUboBinding >= 0 && p.externalUboBinding < c.uboBuffer.length
-            && c.uboBuffer[p.externalUboBinding] != 0) {
-            GLResources.GLBuffer b = res.buffers.get(c.uboBuffer[p.externalUboBinding]);
-            if (b == null || b.vk == null) return n;
-            b.vk.lastUse = dev.currentFrame();
-            buffer = b.vk.buffer;
-            offset = c.uboOffset[p.externalUboBinding];
-            size = (int) Math.min(size, b.vk.size - offset);
-        } else {
-            java.nio.ByteBuffer v = vertex ? p.vsValues : p.fsValues;
-            if (v == null) return n;
-            offset = ringWrite(v, size);
-            buffer = ring.buffer;
-        }
+    private int bufferWrite(VkWriteDescriptorSet.Buffer w, int k, int binding, int e, MemoryStack stack) {
         VkDescriptorBufferInfo.Buffer info = VkDescriptorBufferInfo.calloc(1, stack);
         info.get(0)
-            .buffer(buffer)
-            .offset(offset)
-            .range(size);
-        writes.get(n)
+            .buffer(pushing[e])
+            .offset(pushing[e + 1])
+            .range(pushing[e + 2]);
+        w.get(k)
             .sType$Default()
             .dstBinding(binding)
             .descriptorCount(1)
             .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
             .pBufferInfo(info);
-        return n + 1;
+        return k + 1;
     }
 
     private GLResources.GLTexture blank() {
@@ -796,6 +971,16 @@ final class VulkanRenderer {
     }
 
     private long sampler(GLResources.GLTexture t) {
+        if (t.vkSamplerVersion == t.samplerVersion && t.vkSamplerImage == t.image && t.vkSampler != 0)
+            return t.vkSampler;
+        long made = makeSampler(t);
+        t.vkSampler = made;
+        t.vkSamplerVersion = t.samplerVersion;
+        t.vkSamplerImage = t.image;
+        return made;
+    }
+
+    private long makeSampler(GLResources.GLTexture t) {
         boolean mip = t.minFilter >= 0x2700 && t.image.levels > 1;
         boolean minLinear = t.minFilter == 0x2601 || t.minFilter == 0x2701 || t.minFilter == 0x2703;
         boolean mipLinear = t.minFilter == 0x2702 || t.minFilter == 0x2703;
@@ -854,11 +1039,16 @@ final class VulkanRenderer {
     private static final class PipelineKey {
 
         final long[] parts;
-        final int hash;
+        int hash;
 
         PipelineKey(long[] parts) {
             this.parts = parts;
             this.hash = Arrays.hashCode(parts);
+        }
+
+        /** For the reusable lookup key, after its parts were filled in. */
+        void rehash() {
+            hash = Arrays.hashCode(parts);
         }
 
         @Override
@@ -872,14 +1062,18 @@ final class VulkanRenderer {
         }
     }
 
+    private final long[] keyScratch = new long[24];
+    private final PipelineKey probe = new PipelineKey(keyScratch);
+    private long lastPipeline;
+    private final long[] lastKey = new long[24];
+
     private long pipeline(VulkanShaders.GLProgram p, VertexArray vao, RenderState s, int mode) {
-        long[] k = new long[24];
-        int i = 0;
-        k[i++] = (long) p.id << 32 | p.version;
+        long[] k = keyScratch;
+        Arrays.fill(k, 0);
+        k[0] = (long) p.id << 32 | p.version;
         long inputs = 0;
         int j = 0;
-        for (int loc : p.attribLocations.values()) {
-            if (loc < 0 || loc >= 16) continue;
+        for (int loc : p.locations) {
             long fmt = vao.enabled[loc]
                 ? vertexFormat(vao.type[loc], vao.size[loc], vao.normalized[loc], vao.integer[loc])
                 : VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -887,34 +1081,40 @@ final class VulkanRenderer {
             k[1 + (j++ % 16)] ^= (loc + 1L) << 40 | fmt << 8 | rate;
             inputs |= 1L << loc;
         }
-        i = 17;
-        k[i++] = inputs;
-        k[i++] = (s.blend ? 1L : 0) | (long) s.srcRGB << 1
+        k[17] = inputs;
+        k[18] = (s.blend ? 1L : 0) | (long) s.srcRGB << 1
             | (long) s.dstRGB << 15
             | (long) s.srcAlpha << 29
             | (long) s.dstAlpha << 43;
-        k[i++] = (long) s.eqRGB << 32 | s.eqAlpha;
-        k[i++] = (s.colorMask[0] ? 1 : 0) | (s.colorMask[1] ? 2 : 0)
+        k[19] = (long) s.eqRGB << 32 | s.eqAlpha;
+        k[20] = (s.colorMask[0] ? 1 : 0) | (s.colorMask[1] ? 2 : 0)
             | (s.colorMask[2] ? 4 : 0)
             | (s.colorMask[3] ? 8 : 0)
             | (long) topologyClass(mode) << 4
             | (long) s.polygonMode << 8;
         long formats = targetDepthFormat;
         for (int f : targetColorFormats) formats = formats * 1000003L + f;
-        k[i++] = formats;
-        k[i++] = targetColorFormats.length;
-        PipelineKey key = new PipelineKey(k);
-        Long cached = pipelines.get(key);
-        if (cached != null) return cached;
-        if (Stats.ON) Stats.fPipelines++;
-        long t0 = Stats.ON ? System.nanoTime() : 0;
-        long created = createPipeline(p, vao, s, mode);
-        if (Stats.ON) {
-            Stats.fPipelineNs += System.nanoTime() - t0;
-            Stats.fWhat += " pipeline(program " + p.id + ")";
+        k[21] = formats;
+        k[22] = targetColorFormats.length;
+        // Most draws use the same pipeline as the draw before them.
+        if (lastPipeline != 0 && Arrays.equals(k, lastKey)) return lastPipeline;
+        probe.rehash();
+        Long cached = pipelines.get(probe);
+        long result;
+        if (cached != null) result = cached;
+        else {
+            if (Stats.ON) Stats.fPipelines++;
+            long t0 = Stats.ON ? System.nanoTime() : 0;
+            result = createPipeline(p, vao, s, mode);
+            if (Stats.ON) {
+                Stats.fPipelineNs += System.nanoTime() - t0;
+                Stats.fWhat += " pipeline(program " + p.id + ")";
+            }
+            pipelines.put(new PipelineKey(k.clone()), result);
         }
-        pipelines.put(key, created);
-        return created;
+        System.arraycopy(k, 0, lastKey, 0, k.length);
+        lastPipeline = result;
+        return result;
     }
 
     private long createPipeline(VulkanShaders.GLProgram p, VertexArray vao, RenderState s, int mode) {

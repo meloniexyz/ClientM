@@ -104,6 +104,12 @@ final class VulkanShaders {
         int externalUboBinding = -1;
         /** Bumped when the program is relinked, so pipelines built for the old version are not reused. */
         int version;
+        /** Draw-time data worked out once per link (see VulkanRenderer.prepare). */
+        int preparedVersion = -1;
+        int[] locations = new int[0];
+        Uniform[] vsSamplerUniforms = new Uniform[0], fsSamplerUniforms = new Uniform[0];
+        /** Where this program's value blocks were last written in the per-frame ring, and in which frame. */
+        long vsRingOffset = -1, fsRingOffset = -1, ringFrame = -1, ringBuffer;
 
         GLProgram(int id) {
             this.id = id;
@@ -111,8 +117,8 @@ final class VulkanShaders {
     }
 
     private final VulkanDevice dev;
-    final Map<Integer, GLShader> shaders = new HashMap<>();
-    final Map<Integer, GLProgram> programs = new HashMap<>();
+    final IdMap<GLShader> shaders = new IdMap<>();
+    final IdMap<GLProgram> programs = new IdMap<>();
 
     VulkanShaders(VulkanDevice dev) {
         this.dev = dev;

@@ -732,13 +732,13 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     public void activeTexture(int texture) {
-        bindLog("active " + (texture - 0x84C0));
+        if (DEBUG_TEX) bindLog("active " + (texture - 0x84C0));
         res().ctx().activeUnit = Math.max(0, Math.min(GLResources.UNITS - 1, texture - 0x84C0));
     }
 
     @Override
     public void bindTexture(int target, int texture) {
-        bindLog("bind 0x" + Integer.toHexString(target) + " " + texture);
+        if (DEBUG_TEX) bindLog("bind 0x" + Integer.toHexString(target) + " " + texture);
         GLResources r = res();
         r.ctx().boundTextures[r.ctx().activeUnit] = texture;
         if (texture != 0) r.texture(texture);
@@ -746,7 +746,7 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     public void bindTextureUnit(int unit, int texture) {
-        bindLog("unit " + unit + " " + texture);
+        if (DEBUG_TEX) bindLog("unit " + unit + " " + texture);
         GLResources r = res();
         if (unit >= 0 && unit < GLResources.UNITS) r.ctx().boundTextures[unit] = texture;
         if (texture != 0) r.texture(texture);
@@ -1866,6 +1866,7 @@ public final class VulkanRenderBackend extends RenderBackend {
     @Override
     public void deleteFramebuffers(int framebuffer) {
         if (rnd().framebuffers.remove(framebuffer) == null) return;
+        rnd().framebufferEdits++;
         synchronized (res().lock) {
             rnd().endRendering();
         }
@@ -1881,6 +1882,7 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     private void attach(VulkanRenderer.Framebuffer fb, int attachment, int texture, int level, int renderbuffer) {
         if (fb == null) return;
+        rnd().framebufferEdits++;
         synchronized (res().lock) {
             rnd().endRendering();
         }
@@ -1942,6 +1944,7 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void drawBuffer(int mode) {
         VulkanRenderer.Framebuffer fb = fbo(GL_DRAW_FRAMEBUFFER);
         if (fb != null) fb.drawBuffers = mode == 0 ? new int[0] : new int[] { mode - 0x8CE0 };
+        rnd().framebufferEdits++;
     }
 
     @Override
@@ -1961,6 +1964,7 @@ public final class VulkanRenderBackend extends RenderBackend {
             if (b != 0) list[k++] = b - 0x8CE0;
         }
         fb.drawBuffers = java.util.Arrays.copyOf(list, k);
+        rnd().framebufferEdits++;
     }
 
     @Override

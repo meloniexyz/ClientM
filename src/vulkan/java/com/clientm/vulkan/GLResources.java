@@ -4,8 +4,6 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
 import java.nio.ByteBuffer;
-import java.util.HashMap;
-import java.util.Map;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -44,7 +42,7 @@ final class GLResources {
         }
     }
 
-    final Map<Integer, GLBuffer> buffers = new HashMap<>();
+    final IdMap<GLBuffer> buffers = new IdMap<>();
 
     // ------------------------------------------------------------------ textures
 
@@ -60,6 +58,10 @@ final class GLResources {
         int compareMode, compareFunc = 0x0203;
         /** Bumped whenever sampling settings change, so cached samplers are rebuilt. */
         int samplerVersion;
+        /** The Vulkan sampler for the current settings and image (see VulkanRenderer.sampler). */
+        long vkSampler;
+        int vkSamplerVersion = -1;
+        VulkanImage vkSamplerImage;
         /** Sizes this texture has had, for diagnostics. */
         final StringBuilder history = new StringBuilder();
 
@@ -68,7 +70,7 @@ final class GLResources {
         }
     }
 
-    final Map<Integer, GLTexture> textures = new HashMap<>();
+    final IdMap<GLTexture> textures = new IdMap<>();
     static final int UNITS = 32;
 
     private int misfits;
