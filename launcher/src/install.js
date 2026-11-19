@@ -213,9 +213,15 @@ async function install(root, manifest, resourcesDir, progress) {
       jobs.push({ url: n.url, dest: path.join(root, 'libraries', n.path), check: n, unpack: true });
     }
   }
+  // Libraries ClientM needs on top of lwjgl3ify's list (LWJGL's Vulkan bindings for the Vulkan renderer).
+  for (const extra of manifest.extraLibraries || []) {
+    const dest = path.join(root, 'libraries', extra.path);
+    classpath.push(dest);
+    jobs.push({ url: extra.url, dest, check: { size: extra.size, sha256: extra.sha256 } });
+  }
   let done = 0;
   await pool(jobs, 8, async (j) => {
-    const fresh = await fetchTo(j.url, j.dest, { size: j.check.size, sha1: j.check.sha1 });
+    const fresh = await fetchTo(j.url, j.dest, { size: j.check.size, sha1: j.check.sha1, sha256: j.check.sha256 });
     if (j.unpack && (fresh || !fs.existsSync(nativesDir))) {
       const zip = new AdmZip(j.dest);
       for (const e of zip.getEntries()) {

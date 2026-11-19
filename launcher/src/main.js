@@ -30,7 +30,7 @@ function readSettings() {
   } catch (e) {
     // defaults
   }
-  return { heapGb: manifest.defaultHeapGb, azureClientId: '', ...s };
+  return { heapGb: manifest.defaultHeapGb, azureClientId: '', renderer: 'vulkan', ...s };
 }
 
 function writeSettings(s) {
@@ -155,6 +155,7 @@ function state() {
     clientIdSet: !!s.azureClientId,
     azureClientId: s.azureClientId,
     heapGb: s.heapGb,
+    renderer: s.renderer,
     running: !!game,
     version: app.getVersion(),
   };
@@ -170,6 +171,7 @@ ipcMain.handle('settings', (e, patch) => {
   const s = readSettings();
   if (typeof patch.heapGb === 'number') s.heapGb = Math.max(2, Math.min(8, Math.round(patch.heapGb)));
   if (typeof patch.azureClientId === 'string') s.azureClientId = patch.azureClientId.trim();
+  if (patch.renderer === 'vulkan' || patch.renderer === 'opengl') s.renderer = patch.renderer;
   writeSettings(s);
   return state();
 });
@@ -242,6 +244,10 @@ ipcMain.handle('play', async (e, opts) => {
   }
 
   const inst = await install(root, manifest, resourcesDir, (text, fraction) => send('progress', { text, fraction }));
+  // The game reads its renderer from this file at start-up (Vulkan when it is missing).
+  fs.mkdirSync(path.join(inst.gameDir, 'config'), { recursive: true });
+  fs.writeFileSync(path.join(inst.gameDir, 'config', 'clientm-renderer.txt'), s.renderer + '
+');
   send('progress', { text: 'Starting Minecraft', fraction: 1 });
   game = launch(inst, session, { heapGb: s.heapGb, jvmFlags: manifest.jvmFlags, env });
   game.on('exit', (code) => {

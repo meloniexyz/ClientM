@@ -37,6 +37,18 @@ async function download(item, name) {
   for (const m of manifest.mods) zip.addLocalFile(await download(m, m.file), '.minecraft/mods');
   zip.addLocalFile(path.join(__dirname, '..', 'resources', 'mods', 'ClientM.jar'), '.minecraft/mods');
 
+  // LWJGL's Vulkan bindings for ClientM's Vulkan renderer: lwjgl3ify's LWJGL component does not list them.
+  const lwjglPatch = JSON.parse(zip.readAsText('patches/org.lwjgl3.json'));
+  for (const extra of manifest.extraLibraries || []) {
+    const name = 'org.lwjgl:' + path.basename(extra.path).replace(/-(\d[\d.]*)\.jar$/, ':$1');
+    if (lwjglPatch.libraries.some((l) => l.name === name)) continue;
+    lwjglPatch.libraries.push({
+      downloads: { artifact: { sha1: extra.sha1, size: extra.size, url: extra.url } },
+      name,
+    });
+  }
+  zip.updateFile('patches/org.lwjgl3.json', Buffer.from(JSON.stringify(lwjglPatch, null, 4)));
+
   // Same reason as fixServerCompatibility() in src/install.js: this option breaks ordinary servers.
   zip.addFile(
     '.minecraft/config/hodgepodge.cfg',

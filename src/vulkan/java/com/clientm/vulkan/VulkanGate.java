@@ -18,8 +18,9 @@ import me.eigenraven.lwjgl3ify.api.Lwjgl3Aware;
  * Decides whether this start uses the ClientM Vulkan renderer and, if so, creates the game window for Vulkan instead
  * of OpenGL. Called by name from MixinForgeHooksClient_VulkanDisplay in the main mod code.
  *
- * It is only used when asked for: the environment variable CLIENTM_RENDERER=vulkan, or -Dclientm.renderer=vulkan, or
- * a file config/clientm-renderer.txt containing "vulkan". Anything going wrong falls back to OpenGL.
+ * Vulkan is the default. OpenGL is chosen with a file config/clientm-renderer.txt containing "opengl" (the launcher's
+ * renderer setting writes it), the environment variable CLIENTM_RENDERER=opengl or -Dclientm.renderer=opengl. Anything
+ * going wrong while setting Vulkan up falls back to OpenGL.
  */
 // Calls LWJGL 3 directly, so lwjgl3ify must not redirect it to its LWJGL 2 compatibility layer.
 @Lwjgl3Aware
@@ -45,8 +46,9 @@ public final class VulkanGate {
                     java.nio.charset.StandardCharsets.UTF_8).trim();
             } catch (Throwable ignored) {}
         }
-        return value != null && value.toLowerCase(Locale.ROOT)
-            .startsWith("vulkan");
+        if (value == null || value.isEmpty()) return true;
+        String v = value.toLowerCase(Locale.ROOT);
+        return !(v.startsWith("opengl") || v.equals("gl"));
     }
 
     /** True once the window belongs to Vulkan; the backend reports itself available only then. */
@@ -103,6 +105,8 @@ public final class VulkanGate {
         DisplayEvents.addPostWindowCreateListener((DisplayWindowContext ctx) -> {
             if (ctx.glContextEnabled()) return;
             try {
+                // Development aid: pretend this computer cannot run Vulkan, to test falling back to OpenGL.
+                if (System.getenv("CLIENTM_VK_TEST_FAIL") != null) throw new IllegalStateException("test failure");
                 VulkanDevice d = new VulkanDevice(ctx.window());
                 d.create();
                 device = d;

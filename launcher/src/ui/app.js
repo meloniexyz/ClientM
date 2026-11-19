@@ -62,7 +62,11 @@ function render() {
   $('playBtn').disabled = busy || st.running || !st.account;
   $('playBtn').textContent = st.running ? 'Playing' : 'Play';
   $('testBtn').disabled = busy || st.running;
-  document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', +c.dataset.gb === st.heapGb));
+  document.querySelectorAll('.chip[data-gb]').forEach((c) => c.classList.toggle('on', +c.dataset.gb === st.heapGb));
+  document
+    .querySelectorAll('.chip[data-renderer]')
+    .forEach((c) => c.classList.toggle('on', c.dataset.renderer === st.renderer));
+  $('rendererFact').textContent = st.renderer === 'opengl' ? 'Angelica on OpenGL' : 'ClientM Vulkan (fastest)';
   if (!busy && !st.running && !$('status').classList.contains('err')) {
     status(!st.clientIdSet ? 'Add your Azure client ID in Settings to enable sign-in.' : !st.account ? 'Sign in to play.' : '');
   }
@@ -120,9 +124,16 @@ $('settingsSave').onclick = async () => {
   render();
 };
 
-document.querySelectorAll('.chip').forEach((c) => {
+document.querySelectorAll('.chip[data-gb]').forEach((c) => {
   c.onclick = async () => {
     st = await api.settings({ heapGb: +c.dataset.gb });
+    render();
+  };
+});
+
+document.querySelectorAll('.chip[data-renderer]').forEach((c) => {
+  c.onclick = async () => {
+    st = await api.settings({ renderer: c.dataset.renderer });
     render();
   };
 });

@@ -96,7 +96,7 @@
     <div class="sub">The fastest setup measured on this client is used by default.</div>
     <div class="facts">
       <div class="fact"><small>Java</small>21, with tuned memory flags</div>
-      <div class="fact"><small>Renderer</small>Angelica on OpenGL</div>
+      <div class="fact"><small>Renderer</small><span id="rendererFact">ClientM Vulkan</span></div>
       <div class="fact"><small>Graphics library</small>LWJGL 3</div>
       <div class="fact"><small>Video preset on first launch</small>Low (max FPS)</div>
     </div>
@@ -105,6 +105,10 @@
       <button class="chip" data-gb="3">3 GB</button>
       <button class="chip" data-gb="4">4 GB</button>
       <button class="chip" data-gb="6">6 GB</button>
+    </div>
+    <div class="heap">Renderer
+      <button class="chip" data-renderer="vulkan">Vulkan</button>
+      <button class="chip" data-renderer="opengl">OpenGL</button>
     </div>
     <div class="sp"></div>
     <div class="status" id="status"></div>
