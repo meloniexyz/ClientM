@@ -152,6 +152,7 @@ public class ModuleManager {
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
+        com.clientm.module.impl.HitFixModule.tickEnd();
         if (firstRun) {
             // No config yet: this is the first launch, so start from the best-performance settings.
             firstRun = false;

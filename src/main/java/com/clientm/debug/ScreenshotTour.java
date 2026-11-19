@@ -178,6 +178,106 @@ public final class ScreenshotTour {
     private final int[] frameNanos = new int[400000];
     private int frames;
 
+    // ---- CLIENTM_TOUR=clicks: clicks fed into the game's mouse queue (the real mouse is not touched), measuring the
+    // time from each click to its swing, with Hit Fix's instant clicks on and then off.
+    private boolean clicking;
+    private int clickNo, clickPhase;
+    private long clickAt, releaseAt, nextClickAt;
+    private final long[][] clickDelays = new long[2][40];
+    private final int[][] clickSwings = new int[2][40];
+
+    @SubscribeEvent
+    public void onClickTest(TickEvent.RenderTickEvent event) {
+        if (!clicking || event.phase != TickEvent.Phase.END || mc.thePlayer == null) return;
+        long now = System.nanoTime();
+        mc.inGameHasFocus = true; // the test window may not have the keyboard focus; the game must act as if it had
+        if (mc.currentScreen != null) mc.displayGuiScreen(null);
+        com.clientm.module.Module hitfix = module("hitfix");
+        if (clickAt != 0) {
+            long swing = com.clientm.module.impl.HitFixModule.lastSwingNs;
+            int n = com.clientm.module.impl.HitFixModule.swings;
+            if (swing >= clickAt && clickDelays[clickPhase][clickNo] == 0)
+                clickDelays[clickPhase][clickNo] = swing - clickAt;
+            clickSwings[clickPhase][clickNo] = n;
+            if (releaseAt == 0 && now - clickAt > 30_000_000L) {
+                injectClick(false);
+                releaseAt = now;
+            }
+            if (now - clickAt < 200_000_000L) return; // let the click finish and every tick see it
+            clickAt = 0;
+            releaseAt = 0;
+            if (++clickNo == 40) {
+                clickNo = 0;
+                if (++clickPhase == 2) {
+                    clicking = false;
+                    reportClicks();
+                    mc.shutdown();
+                    return;
+                }
+            }
+            // Random gaps, so clicks land at every point between two game ticks.
+            nextClickAt = now + 60_000_000L + (long) (Math.random() * 90_000_000L);
+            return;
+        }
+        if (now < nextClickAt) return;
+        setOption(hitfix, "clicks", clickPhase == 0);
+        com.clientm.module.impl.HitFixModule.swings = 0;
+        com.clientm.module.impl.HitFixModule.lastSwingNs = 0;
+        clickAt = System.nanoTime();
+        injectClick(true);
+    }
+
+    /** Puts a left-button event into lwjgl3ify's mouse queue, as if the button had been pressed or released. */
+    private static void injectClick(boolean down) {
+        try {
+            Class<?> mouse = Class.forName("org.lwjglx.input.Mouse");
+            mouse.getMethod("addButtonEvent", int.class, boolean.class)
+                .invoke(null, 0, down);
+            ClientM.LOG.info("CLICKDBG injected {} at {}", down ? "press" : "release", System.nanoTime());
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("The click test needs lwjgl3ify", e);
+        }
+    }
+
+    private static void setOption(com.clientm.module.Module m, String id, boolean value) {
+        for (com.clientm.setting.Setting s : m.settings)
+            if (s.id.equals(id)) ((com.clientm.setting.BoolSetting) s).value = value;
+    }
+
+    private void reportClicks() {
+        StringBuilder out = new StringBuilder();
+        String[] names = { "instant clicks ON ", "instant clicks OFF" };
+        for (int ph = 0; ph < 2; ph++) {
+            long[] d = clickDelays[ph].clone();
+            java.util.Arrays.sort(d);
+            double sum = 0;
+            int once = 0, missed = 0;
+            for (int i = 0; i < 40; i++) {
+                sum += d[i];
+                if (clickSwings[ph][i] == 1) once++;
+                if (clickDelays[ph][i] == 0) missed++;
+            }
+            out.append(
+                String.format(
+                    "%s: click to swing avg %.1f ms, median %.1f ms, max %.1f ms; exactly one swing %d/40, no swing %d%n",
+                    names[ph],
+                    sum / 40 / 1e6,
+                    d[20] / 1e6,
+                    d[39] / 1e6,
+                    once,
+                    missed));
+        }
+        ClientM.LOG.info("Click test:\n{}", out);
+        try {
+            java.nio.file.Files.write(
+                new java.io.File(mc.mcDataDir, "clientm-clicks.txt").toPath(),
+                out.toString()
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.io.IOException e) {
+            ClientM.LOG.error("Could not write the click test result", e);
+        }
+    }
+
     @SubscribeEvent
     public void onRender(TickEvent.RenderTickEvent event) {
         if (!benching || event.phase != TickEvent.Phase.START || mc.thePlayer == null) return;
@@ -642,6 +742,12 @@ public final class ScreenshotTour {
         }
         if ("world".equals(System.getenv("CLIENTM_TOUR"))) {
             worldTest();
+            return;
+        }
+        if ("clicks".equals(System.getenv("CLIENTM_TOUR"))) {
+            noonAndClear();
+            mc.gameSettings.pauseOnLostFocus = false;
+            clicking = true;
             return;
         }
         if ("hit".equals(System.getenv("CLIENTM_TOUR"))) {
