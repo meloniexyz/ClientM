@@ -447,6 +447,11 @@ final class VulkanShaders {
         return handle.get(0);
     }
 
+    /** At shutdown: frees every program's Vulkan objects. */
+    void freeAll() {
+        for (GLProgram p : programs.values()) destroyProgramObjects(p);
+    }
+
     void destroyProgramObjects(GLProgram p) {
         final long vs = p.vsModule, fs = p.fsModule, layout = p.pipelineLayout;
         final long[] sets = p.setLayouts.clone();

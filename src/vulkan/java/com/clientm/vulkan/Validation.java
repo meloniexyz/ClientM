@@ -30,11 +30,19 @@ final class Validation {
     private static final Logger LOG = LogManager.getLogger("ClientM/Vulkan/Validation");
     private static final Map<Integer, AtomicInteger> SEEN = new ConcurrentHashMap<>();
     private static VkDebugUtilsMessengerCallbackEXT callback;
+    private static long messenger;
 
     private Validation() {}
 
     static boolean requested() {
         return System.getenv("CLIENTM_VK_VALIDATE") != null || Boolean.getBoolean("clientm.vulkan.validate");
+    }
+
+    static void detach(VkInstance instance) {
+        if (messenger != 0) vkDestroyDebugUtilsMessengerEXT(instance, messenger, null);
+        messenger = 0;
+        if (callback != null) callback.free();
+        callback = null;
     }
 
     static void attach(VkInstance instance) {
@@ -64,6 +72,7 @@ final class Validation {
                 .pfnUserCallback(callback);
             LongBuffer handle = stack.mallocLong(1);
             vkCreateDebugUtilsMessengerEXT(instance, info, null, handle);
+            messenger = handle.get(0);
         }
         LOG.info("Vulkan validation is on");
     }

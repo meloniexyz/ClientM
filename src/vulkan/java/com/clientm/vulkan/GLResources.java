@@ -370,6 +370,27 @@ final class GLResources {
     private final java.util.ArrayList<VulkanImage> pendingImages = new java.util.ArrayList<>();
     private boolean flushing;
 
+    /** At shutdown: releases every buffer and image (freed by the device before it is destroyed). */
+    void freeAll() {
+        synchronized (lock) {
+            for (GLBuffer b : buffers.values()) {
+                if (b.vk != null) b.vk.release(dev);
+                b.vk = null;
+            }
+            for (GLTexture t : textures.values()) {
+                if (t.image != null) t.image.release(dev);
+                t.image = null;
+            }
+            for (int i = 0; i < stagingBlocks.length; i++) {
+                if (stagingBlocks[i] != null) stagingBlocks[i].release(dev);
+                stagingBlocks[i] = null;
+            }
+            if (screenColor != null) screenColor.release(dev);
+            if (screenDepth != null) screenDepth.release(dev);
+            screenColor = screenDepth = null;
+        }
+    }
+
     boolean hasPendingUploads() {
         return !pending.isEmpty();
     }

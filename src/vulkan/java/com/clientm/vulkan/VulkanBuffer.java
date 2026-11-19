@@ -58,6 +58,17 @@ final class VulkanBuffer {
         for (int i = 0; i < CLASSES; i++) POOL[i] = new java.util.ArrayDeque<>();
     }
 
+    /** At shutdown: frees the recycled buffers waiting in the pool. */
+    static void drainPool(VulkanDevice dev) {
+        for (java.util.ArrayDeque<long[]> q : POOL) {
+            for (long[] h : q) {
+                vkDestroyBuffer(dev.vk(), h[0], null);
+                vkFreeMemory(dev.vk(), h[1], null);
+            }
+            q.clear();
+        }
+    }
+
     private static int sizeClass(long size) {
         int c = 0;
         while (c < CLASSES && (256L << c) < size) c++;

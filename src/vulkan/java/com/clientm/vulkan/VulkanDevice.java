@@ -114,6 +114,9 @@ final class VulkanDevice {
     /** Called just before a frame is submitted, so open drawing work can be closed. */
     Runnable beforeSubmit = () -> {};
 
+    /** Frees everything the renderer made, at shutdown, while the device still exists. */
+    Runnable beforeDestroy = () -> {};
+
     private GpuTimer timer;
 
     /** Development aid: marks a point in the frame for the GPU timer (CLIENTM_VK_STATS). */
@@ -904,10 +907,18 @@ final class VulkanDevice {
             submitter.shutdown();
             vkDeviceWaitIdle(device);
             savePipelineCache();
+            try {
+                beforeDestroy.run();
+            } catch (Throwable t) {
+                LOG.warn("Freeing the renderer's objects failed: {}", t.toString());
+            }
+            if (timer != null) timer.destroy();
             for (List<Runnable> work : deferred) {
                 for (Runnable r : work) r.run();
                 work.clear();
             }
+            // Released small buffers went back to the pool above; free those last.
+            VulkanBuffer.drainPool(this);
             for (long s : renderDone) vkDestroySemaphore(device, s, null);
             for (long v : swapViews) vkDestroyImageView(device, v, null);
             swapViews = new long[0];
@@ -922,6 +933,7 @@ final class VulkanDevice {
         }
         if (instance != null) {
             if (surface != 0) vkDestroySurfaceKHR(instance, surface, null);
+            Validation.detach(instance);
             vkDestroyInstance(instance, null);
             instance = null;
         }

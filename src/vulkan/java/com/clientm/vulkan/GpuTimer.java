@@ -86,6 +86,10 @@ final class GpuTimer {
         counts[slot] = 0;
     }
 
+    void destroy() {
+        for (long pool : pools) if (pool != 0) vkDestroyQueryPool(dev.vk(), pool, null);
+    }
+
     void stamp(VkCommandBuffer cmd, int slot, String label) {
         int i = counts[slot];
         if (i >= MAX) return;

@@ -1435,6 +1435,11 @@ public final class VulkanRenderBackend extends RenderBackend {
                 };
                 Barriers.outsideRendering = outside;
                 r.dev.beforeSubmit = outside;
+                r.dev.beforeDestroy = () -> {
+                    created.freeAll();
+                    sh().freeAll();
+                    r.freeAll();
+                };
                 rendererStore = created;
             }
             return rendererStore;

@@ -1279,6 +1279,27 @@ final class VulkanRenderer {
         Barriers.full(cmd);
     }
 
+    /** At shutdown: frees pipelines, samplers, the per-frame rings and renderbuffer images. */
+    void freeAll() {
+        synchronized (res.lock) {
+            endRendering();
+            for (long pipeline : pipelines.values()) if (pipeline != 0) vkDestroyPipeline(dev.vk(), pipeline, null);
+            pipelines.clear();
+            for (long sampler : samplers.values()) vkDestroySampler(dev.vk(), sampler, null);
+            samplers.clear();
+            for (int i = 0; i < rings.length; i++) {
+                if (rings[i] != null) rings[i].release(dev);
+                rings[i] = null;
+            }
+            for (Renderbuffer rb : renderbuffers.values()) if (rb.image != null) {
+                rb.image.release(dev);
+                rb.image = null;
+            }
+            if (blank != null && blank.image != null) blank.image.release(dev);
+            blank = null;
+        }
+    }
+
     /** Frees a renderbuffer's image when it is deleted or re-sized. */
     void releaseRenderbuffer(Renderbuffer rb) {
         if (rb != null && rb.image != null) synchronized (res.lock) {
