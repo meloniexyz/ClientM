@@ -35,6 +35,8 @@ final class VulkanBuffer {
     long buffer, memory;
     /** Address of the mapped memory. */
     long address;
+    /** The GPU has written into this buffer (a copy), so its CPU-visible memory may not hold the latest contents. */
+    boolean gpuWritten;
     /** The last frame that recorded GPU work using this buffer. */
     long lastUse;
 

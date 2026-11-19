@@ -233,6 +233,17 @@ final class GLResources {
                 MemoryUtil.memCopy(MemoryUtil.memAddress(data), b.vk.address + offset, n);
                 return;
             }
+            if (!b.vk.gpuOnly && !b.vk.gpuWritten && b.vk.size <= (1 << 20)) {
+                // Small CPU-visible buffer still in use: give it fresh memory holding the old contents plus the new
+                // data. Draws already recorded keep reading the old memory, which is recycled once they are done.
+                VulkanBuffer old = b.vk;
+                VulkanBuffer fresh = VulkanBuffer.obtain(dev, old.size, false);
+                MemoryUtil.memCopy(old.address, fresh.address, old.size);
+                MemoryUtil.memCopy(MemoryUtil.memAddress(data), fresh.address + offset, n);
+                old.release(dev);
+                b.vk = fresh;
+                return;
+            }
             // Still in use: the new data goes in through a copy on the GPU, in order with the frame's work.
             if (Stats.ON) {
                 Stats.stagedWrites++;
@@ -251,6 +262,7 @@ final class GLResources {
             }
             Barriers.full(cmd);
             b.vk.lastUse = dev.currentFrame();
+            b.vk.gpuWritten = true;
         }
     }
 
@@ -270,6 +282,7 @@ final class GLResources {
             }
             Barriers.full(cmd);
             from.vk.lastUse = to.vk.lastUse = dev.currentFrame();
+            to.vk.gpuWritten = true;
         }
     }
 

@@ -131,6 +131,7 @@ final class VulkanRenderer {
     private int[] targetColorFormats = new int[0];
     private int targetDepthFormat;
     private boolean targetHasStencil;
+    private boolean targetFlipped;
 
     VulkanRenderer(VulkanDevice dev, GLResources res, VulkanShaders shaders) {
         this.dev = dev;
@@ -157,13 +158,21 @@ final class VulkanRenderer {
         VulkanImage depth;
         long key;
         int width, height;
+        /** Rows run top-down (the window's own image): OpenGL's bottom-up coordinates are flipped when drawing. */
+        boolean flipped;
     }
 
     private Target target(int framebuffer) {
         Target t = new Target();
         if (framebuffer == 0) {
             res.ensureScreen();
-            t.colors = new VulkanImage[] { res.screenColor };
+            VulkanImage window = dev.acquireTarget();
+            if (window != null && window.width == res.screenDepth.width && window.height == res.screenDepth.height) {
+                t.colors = new VulkanImage[] { window };
+                t.flipped = true;
+            } else {
+                t.colors = new VulkanImage[] { res.screenColor };
+            }
             t.colorLevels = new int[] { 0 };
             t.depth = res.screenDepth;
         } else {
@@ -277,6 +286,7 @@ final class VulkanRenderer {
         for (int i = 0; i < t.colors.length; i++) targetColorFormats[i] = t.colors[i].format;
         targetDepthFormat = t.depth == null ? VK_FORMAT_UNDEFINED : t.depth.format;
         targetHasStencil = t.depth != null && Formats.hasStencil(t.depth.format);
+        targetFlipped = t.flipped;
         return true;
     }
 
@@ -336,6 +346,7 @@ final class VulkanRenderer {
                 h = clamp(s.scissor[3], 0, targetHeight - y);
             }
             if (w <= 0 || h <= 0) return;
+            if (targetFlipped) y = targetHeight - (y + h);
             rect.get(0)
                 .rect()
                 .offset()
@@ -436,23 +447,27 @@ final class VulkanRenderer {
     private void dynamicState(VkCommandBuffer cmd, RenderState s, int mode) {
         try (MemoryStack stack = stackPush()) {
             VkViewport.Buffer vp = VkViewport.calloc(1, stack);
+            int vw = Math.max(1, s.viewport[2] == 0 ? targetWidth : s.viewport[2]);
+            int vh = Math.max(1, s.viewport[3] == 0 ? targetHeight : s.viewport[3]);
             vp.get(0)
                 .x(s.viewport[0])
-                .y(s.viewport[1])
-                .width(Math.max(1, s.viewport[2] == 0 ? targetWidth : s.viewport[2]))
-                .height(Math.max(1, s.viewport[3] == 0 ? targetHeight : s.viewport[3]))
+                .y(targetFlipped ? targetHeight - s.viewport[1] : s.viewport[1])
+                .width(vw)
+                .height(targetFlipped ? -vh : vh)
                 .minDepth(0f)
                 .maxDepth(1f);
             vkCmdSetViewport(cmd, 0, vp);
             VkRect2D.Buffer sc = VkRect2D.calloc(1, stack);
             if (s.scissorTest) {
                 int x = clamp(s.scissor[0], 0, targetWidth), y = clamp(s.scissor[1], 0, targetHeight);
+                int w = clamp(s.scissor[2], 0, targetWidth - x), h = clamp(s.scissor[3], 0, targetHeight - y);
+                if (targetFlipped) y = targetHeight - (y + h);
                 sc.get(0)
                     .offset()
                     .set(x, y);
                 sc.get(0)
                     .extent()
-                    .set(clamp(s.scissor[2], 0, targetWidth - x), clamp(s.scissor[3], 0, targetHeight - y));
+                    .set(w, h);
             } else {
                 sc.get(0)
                     .extent()
@@ -470,7 +485,10 @@ final class VulkanRenderer {
                 : s.cullMode == 0x0404 ? VK_CULL_MODE_FRONT_BIT
                     : s.cullMode == 0x0408 ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_BACK_BIT);
         // OpenGL's counter-clockwise front faces look clockwise in Vulkan's framebuffer coordinates.
-        vkCmdSetFrontFace(cmd, s.frontFace == 0x0901 ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
+        // Drawing flipped (into the window's image) turns the winding back again.
+        vkCmdSetFrontFace(
+            cmd,
+            (s.frontFace == 0x0901) != targetFlipped ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
         vkCmdSetPrimitiveTopology(cmd, topology(mode));
         vkCmdSetPrimitiveRestartEnable(
             cmd,
@@ -1085,12 +1103,18 @@ final class VulkanRenderer {
     // ------------------------------------------------------------------ copies between framebuffers
 
     /** The image a framebuffer reads colour from (glReadBuffer), with its level. */
+    /** The image framebuffer 0 is drawn into this frame: the window's own (flipped) or the screen image. */
+    private VulkanImage screenImage() {
+        res.ensureScreen();
+        VulkanImage window = dev.directTarget();
+        return window != null && window.width == res.screenDepth.width && window.height == res.screenDepth.height
+            ? window
+            : res.screenColor;
+    }
+
     private VulkanImage readColor(int framebuffer, int[] level) {
         level[0] = 0;
-        if (framebuffer == 0) {
-            res.ensureScreen();
-            return res.screenColor;
-        }
+        if (framebuffer == 0) return screenImage();
         Framebuffer fb = framebuffers.get(framebuffer);
         if (fb == null) return null;
         int i = fb.readBuffer >= 0 && fb.readBuffer < 8 ? fb.readBuffer : 0;
@@ -1101,8 +1125,10 @@ final class VulkanRenderer {
     private VulkanImage drawColor(int framebuffer, int[] level) {
         level[0] = 0;
         if (framebuffer == 0) {
-            res.ensureScreen();
-            return res.screenColor;
+            VulkanImage window = dev.acquireTarget();
+            return window != null && window.width == res.screenDepth.width && window.height == res.screenDepth.height
+                ? window
+                : res.screenColor;
         }
         Framebuffer fb = framebuffers.get(framebuffer);
         if (fb == null) return null;
@@ -1212,6 +1238,15 @@ final class VulkanRenderer {
         dy0 = clamp(dy0, 0, dh);
         dy1 = clamp(dy1, 0, dh);
         if (sx0 == sx1 || sy0 == sy1 || dx0 == dx1 || dy0 == dy1) return;
+        // The window's image has its rows top-down; OpenGL's coordinates count from the bottom.
+        if (src == dev.directTarget()) {
+            sy0 = sh - sy0;
+            sy1 = sh - sy1;
+        }
+        if (dst == dev.directTarget()) {
+            dy0 = dh - dy0;
+            dy1 = dh - dy1;
+        }
         endRendering();
         VkCommandBuffer cmd = dev.cmd();
         Barriers.full(cmd);
@@ -1268,12 +1303,29 @@ final class VulkanRenderer {
     private VulkanBuffer shotBuffer;
     private long shotFrame;
     private int shotWidth, shotHeight;
+    private boolean shotTopDown, shotBgra;
 
     /** Development aid (CLIENTM_VK_SHOT=frame,frame...): records a copy of the screen image of those frames. */
+    private static final java.util.Set<Long> BENCH_SHOTS = new java.util.HashSet<>();
+    static {
+        String v = System.getenv("CLIENTM_VK_SHOT_BENCH");
+        if (v != null) for (String part : v.split(",")) {
+            try {
+                BENCH_SHOTS.add(Long.parseLong(part.trim()));
+            } catch (NumberFormatException ignored) {}
+        }
+    }
+    private long benchStart = -1;
+
     void captureBeforePresent() {
         long frame = dev.currentFrame();
-        if (!SHOTS.contains(frame) || res.screenColor == null) return;
-        VulkanImage img = res.screenColor;
+        boolean benching = System.getProperty("clientm.benching") != null;
+        if (benching && benchStart < 0) benchStart = frame;
+        boolean benchShot = benching && BENCH_SHOTS.contains(frame - benchStart);
+        if (!SHOTS.contains(frame) && !benchShot || res.screenColor == null) return;
+        VulkanImage img = screenImage();
+        shotTopDown = img == dev.directTarget();
+        shotBgra = img.format == VK_FORMAT_B8G8R8A8_UNORM;
         endRendering();
         shotWidth = img.width;
         shotHeight = img.height;
@@ -1307,7 +1359,12 @@ final class VulkanRenderer {
             for (int x = 0; x < shotWidth; x++) {
                 int p = MemoryUtil.memGetInt(shotBuffer.address + ((long) y * shotWidth + x) * 4);
                 int r = p & 0xFF, g = (p >> 8) & 0xFF, b = (p >> 16) & 0xFF;
-                out.setRGB(x, shotHeight - 1 - y, r << 16 | g << 8 | b);
+                if (shotBgra) {
+                    int t = r;
+                    r = b;
+                    b = t;
+                }
+                out.setRGB(x, shotTopDown ? y : shotHeight - 1 - y, r << 16 | g << 8 | b);
             }
         }
         try {

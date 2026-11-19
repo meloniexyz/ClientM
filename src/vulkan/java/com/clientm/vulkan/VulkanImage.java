@@ -31,6 +31,19 @@ final class VulkanImage {
     /** For depth images: a view with depth and stencil, for drawing into. */
     long attachView;
 
+    /** Wraps an image owned by someone else (a swapchain image) and its view; never released through this. */
+    VulkanImage(long image, long view, int width, int height, int format) {
+        this.width = width;
+        this.height = height;
+        this.levels = 1;
+        this.format = format;
+        this.depth = false;
+        this.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        this.image = image;
+        this.view = view;
+        this.levelViews = new long[] { view };
+    }
+
     VulkanImage(VulkanDevice dev, int width, int height, int levels, int format, boolean depth) {
         this.width = Math.max(1, width);
         this.height = Math.max(1, height);

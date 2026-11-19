@@ -87,8 +87,17 @@ final class VulkanDevice {
     private long swapchain;
     private int swapWidth, swapHeight;
     private long[] swapImages = new long[0];
+    /** Views and wrappers of the swapchain images, for drawing straight into them. */
+    private long[] swapViews = new long[0];
+    private VulkanImage[] swapTargets = new VulkanImage[0];
+    private int swapFormat;
+    /** The frame whose swapchain image was acquired early, and that image (-1: acquiring failed). */
+    private long acquiredFrame = -1;
+    private int acquiredIndex = -1;
+    /** The frame whose image-ready signal was already waited for by a mid-frame submit. */
+    private long acquireWaitedFrame = -1;
     private int presentMode;
-    private boolean needsRebuild;
+    private volatile boolean needsRebuild;
 
     private final VkCommandBuffer[] commands = new VkCommandBuffer[FRAMES_IN_FLIGHT];
     private final long[] imageReady = new long[FRAMES_IN_FLIGHT];
@@ -404,6 +413,25 @@ final class VulkanDevice {
             vkGetSwapchainImagesKHR(device, swapchain, count, pImages);
             swapImages = new long[count.get(0)];
             for (int i = 0; i < swapImages.length; i++) swapImages[i] = pImages.get(i);
+            for (long v : swapViews) vkDestroyImageView(device, v, null);
+            swapViews = new long[swapImages.length];
+            swapTargets = new VulkanImage[swapImages.length];
+            swapFormat = chosen;
+            for (int i = 0; i < swapImages.length; i++) {
+                org.lwjgl.vulkan.VkImageViewCreateInfo view = org.lwjgl.vulkan.VkImageViewCreateInfo.calloc(stack)
+                    .sType$Default()
+                    .image(swapImages[i])
+                    .viewType(VK_IMAGE_VIEW_TYPE_2D)
+                    .format(chosen)
+                    .subresourceRange(
+                        r -> r.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                            .levelCount(1)
+                            .layerCount(1));
+                LongBuffer pView = stack.mallocLong(1);
+                check(vkCreateImageView(device, view, null, pView), "create a swapchain image view");
+                swapViews[i] = pView.get(0);
+                swapTargets[i] = new VulkanImage(swapImages[i], swapViews[i], ew, eh, chosen);
+            }
             for (long s : renderDone) vkDestroySemaphore(device, s, null);
             renderDone = new long[swapImages.length];
             LongBuffer handle = stack.mallocLong(1);
@@ -480,6 +508,7 @@ final class VulkanDevice {
     /** True once the graphics card has finished every frame up to and including this one. */
     boolean isDone(long frame) {
         if (frame <= completedFrame) return true;
+        if (frame > submittedFrame) return false;
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
             if (slotFrame[i] == frame && slotFrame[i] < frameNumber
                 && vkGetFenceStatus(device, frameDone[i]) == VK_SUCCESS) {
@@ -493,6 +522,7 @@ final class VulkanDevice {
     /** Waits until the given frame is done on the graphics card. A frame not yet submitted cannot be waited for. */
     void waitFor(long frame) {
         if (frame >= frameNumber) return;
+        if (frame > submittedFrame) drainSubmits();
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
             if (slotFrame[i] == frame) {
                 vkWaitForFences(device, frameDone[i], true, Long.MAX_VALUE);
@@ -507,6 +537,7 @@ final class VulkanDevice {
      */
     void flushAndWait() {
         if (!recording) return;
+        drainSubmits();
         if (Stats.ON) Stats.fFlushes++;
         beforeSubmit.run();
         VkCommandBuffer cmd = commands[slot];
@@ -516,7 +547,16 @@ final class VulkanDevice {
             VkSubmitInfo submit = VkSubmitInfo.calloc(stack)
                 .sType$Default()
                 .pCommandBuffers(stack.pointers(cmd));
-            check(vkQueueSubmit(queue, submit, frameDone[slot]), "submit work");
+            if (acquiredFrame == frameNumber && acquiredIndex >= 0 && acquireWaitedFrame != frameNumber) {
+                // This work may already touch the window's image: it has to wait for the image to be ready.
+                submit.waitSemaphoreCount(1)
+                    .pWaitSemaphores(stack.longs(imageReady[slot]))
+                    .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT));
+                acquireWaitedFrame = frameNumber;
+            }
+            synchronized (queueLock) {
+                check(vkQueueSubmit(queue, submit, frameDone[slot]), "submit work");
+            }
             vkWaitForFences(device, frameDone[slot], true, Long.MAX_VALUE);
             vkResetCommandBuffer(cmd, 0);
             vkBeginCommandBuffer(
@@ -528,6 +568,96 @@ final class VulkanDevice {
         if (timer != null) timer.begin(cmd, slot);
     }
 
+    /**
+     * The window's image for this frame, acquired now so the game's screen can be drawn straight into it (no copy
+     * at the end of the frame). Its rows run top-down, so drawing into it is flipped (see VulkanRenderer). Null when
+     * the window has no image to give (minimised, or being resized): the screen is then drawn into an image of its
+     * own as before.
+     */
+    VulkanImage acquireTarget() {
+        if (DIRECT_OFF) return null;
+        VkCommandBuffer cmd = cmd();
+        if (acquiredFrame == frameNumber) return acquiredIndex >= 0 ? swapTargets[acquiredIndex] : null;
+        acquiredFrame = frameNumber;
+        acquiredIndex = -1;
+        if (needsRebuild) {
+            drainSubmits();
+            vkDeviceWaitIdle(device);
+            createSwapchain();
+            if (needsRebuild) return null;
+        }
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer pIndex = stack.mallocInt(1);
+            drainSubmits(); // the submit thread presents to the same swapchain: never use it at the same time
+            long t0 = Stats.ON ? System.nanoTime() : 0;
+            int acquired = vkAcquireNextImageKHR(
+                device,
+                swapchain,
+                Long.MAX_VALUE,
+                imageReady[slot],
+                VK_NULL_HANDLE,
+                pIndex);
+            if (Stats.ON) Stats.fAcquireNs += System.nanoTime() - t0;
+            if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+                needsRebuild = true;
+                return null;
+            }
+            acquiredIndex = pIndex.get(0);
+        }
+        Barriers.image(
+            cmd,
+            swapImages[acquiredIndex],
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_GENERAL);
+        return swapTargets[acquiredIndex];
+    }
+
+    /** The window image the screen is being drawn into this frame, if any. */
+    VulkanImage directTarget() {
+        return acquiredFrame == frameNumber && acquiredIndex >= 0 ? swapTargets[acquiredIndex] : null;
+    }
+
+    /**
+     * Drawing straight into the window's image measured no faster than drawing into an image of our own and copying
+     * it (the copy got cheaper, the drawing slower), so it is only used with CLIENTM_VK_DIRECT=1.
+     */
+    private static final boolean DIRECT_OFF = !"1".equals(System.getenv("CLIENTM_VK_DIRECT"));
+
+    // ------------------------------------------------------------------ the submit thread
+
+    private final Object queueLock = new Object();
+    /** The last frame the submit thread has submitted; a later frame's fence must not be touched yet. */
+    private volatile long submittedFrame;
+    private final java.util.concurrent.atomic.AtomicInteger pendingSubmits = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.ExecutorService submitter = java.util.concurrent.Executors
+        .newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "ClientM Vulkan present");
+            t.setDaemon(true);
+            t.setPriority(Thread.MAX_PRIORITY);
+            return t;
+        });
+
+    private void submitAsync(Runnable work) {
+        pendingSubmits.incrementAndGet();
+        submitter.execute(() -> {
+            try {
+                synchronized (queueLock) {
+                    work.run();
+                }
+            } catch (Throwable t) {
+                LOG.error("Submitting a frame failed", t);
+            } finally {
+                pendingSubmits.decrementAndGet();
+            }
+        });
+    }
+
+    /** Waits until every frame handed to the submit thread has been submitted (not finished on the GPU). */
+    void drainSubmits() {
+        while (pendingSubmits.get() > 0) java.util.concurrent.locks.LockSupport.parkNanos(20_000);
+    }
+
     /** Runs the action once the graphics card can no longer be using what the current frame used. */
     void later(Runnable action) {
         if (device == null) return; // shut down: everything is already gone
@@ -537,6 +667,7 @@ final class VulkanDevice {
 
     private void beginFrame() {
         slot = (int) (frameNumber % FRAMES_IN_FLIGHT);
+        if (slotFrame[slot] > submittedFrame) drainSubmits();
         long t0 = Stats.ON ? System.nanoTime() : 0;
         vkWaitForFences(device, frameDone[slot], true, Long.MAX_VALUE);
         if (Stats.ON) Stats.fFenceNs += System.nanoTime() - t0;
@@ -575,12 +706,19 @@ final class VulkanDevice {
             int index = -1;
             int f = slot;
             try (MemoryStack stack = stackPush()) {
-                if (needsRebuild) {
+                boolean direct = acquiredFrame == frameNumber && acquiredIndex >= 0;
+                boolean triedEarly = acquiredFrame == frameNumber;
+                if (direct) index = acquiredIndex;
+                if (!triedEarly && needsRebuild) {
+                    drainSubmits();
                     vkDeviceWaitIdle(device);
                     createSwapchain();
                 }
-                if (!needsRebuild) {
+                if (!triedEarly && !needsRebuild) {
                     IntBuffer pIndex = stack.mallocInt(1);
+                    // The submit thread presents to the same swapchain: never use it at the same time. The last
+                    // frame was handed over a whole frame ago, so this rarely waits.
+                    drainSubmits();
                     long ta = Stats.ON ? System.nanoTime() : 0;
                     int acquired = vkAcquireNextImageKHR(
                         device,
@@ -594,7 +732,16 @@ final class VulkanDevice {
                     else needsRebuild = true;
                 }
                 stamp("present blit");
-                if (index >= 0 && screen != null) {
+                if (direct) {
+                    // The screen was drawn straight into the window's image: it only has to be handed over.
+                    Barriers.full(cmd);
+                    Barriers.image(
+                        cmd,
+                        swapImages[index],
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                } else if (index >= 0 && screen != null) {
                     Barriers.full(cmd);
                     Barriers.image(
                         cmd,
@@ -644,32 +791,44 @@ final class VulkanDevice {
                 stamp("end");
                 vkEndCommandBuffer(cmd);
                 vkResetFences(device, frameDone[f]);
-                VkSubmitInfo submit = VkSubmitInfo.calloc(stack)
-                    .sType$Default()
-                    .pCommandBuffers(stack.pointers(cmd));
-                if (index >= 0) {
-                    submit.waitSemaphoreCount(1)
-                        .pWaitSemaphores(stack.longs(imageReady[f]))
-                        .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
-                        .pSignalSemaphores(stack.longs(renderDone[index]));
-                }
-                long ts = Stats.ON ? System.nanoTime() : 0;
-                check(vkQueueSubmit(queue, submit, frameDone[f]), "submit a frame");
-                if (Stats.ON) Stats.fSubmitNs += System.nanoTime() - ts;
-                if (index >= 0) {
-                    long tp = Stats.ON ? System.nanoTime() : 0;
-                    int presented = vkQueuePresentKHR(
-                        queue,
-                        VkPresentInfoKHR.calloc(stack)
+                // Submitting and presenting cost the CPU tens of microseconds each (the driver and Windows do
+                // real work there), so they run on their own thread while the game starts on the next frame.
+                final VkCommandBuffer done = cmd;
+                final int image = index;
+                final long fence = frameDone[f];
+                final long waitFor = index >= 0 && acquireWaitedFrame != frameNumber ? imageReady[f] : 0;
+                final int waitStage = direct ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT;
+                final long signal = index >= 0 ? renderDone[index] : 0;
+                final long chain = swapchain;
+                final long number = frameNumber;
+                submitAsync(() -> {
+                    try (MemoryStack ps = stackPush()) {
+                        VkSubmitInfo submit = VkSubmitInfo.calloc(ps)
                             .sType$Default()
-                            .pWaitSemaphores(stack.longs(renderDone[index]))
-                            .swapchainCount(1)
-                            .pSwapchains(stack.longs(swapchain))
-                            .pImageIndices(stack.ints(index)));
-                    if (Stats.ON) Stats.fPresentNs += System.nanoTime() - tp;
-                    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) needsRebuild = true;
-                    else if (presented != VK_SUCCESS) check(presented, "present a frame");
-                }
+                            .pCommandBuffers(ps.pointers(done));
+                        // Only the copy into the window's image has to wait for it to be free; the frame's
+                        // drawing into our own images can run before that.
+                        if (waitFor != 0) submit.waitSemaphoreCount(1)
+                            .pWaitSemaphores(ps.longs(waitFor))
+                            .pWaitDstStageMask(ps.ints(waitStage));
+                        if (signal != 0) submit.pSignalSemaphores(ps.longs(signal));
+                        check(vkQueueSubmit(queue, submit, fence), "submit a frame");
+                        submittedFrame = number;
+                        if (image >= 0) {
+                            int presented = vkQueuePresentKHR(
+                                queue,
+                                VkPresentInfoKHR.calloc(ps)
+                                    .sType$Default()
+                                    .pWaitSemaphores(ps.longs(signal))
+                                    .swapchainCount(1)
+                                    .pSwapchains(ps.longs(chain))
+                                    .pImageIndices(ps.ints(image)));
+                            if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR)
+                                needsRebuild = true;
+                            else if (presented != VK_SUCCESS) check(presented, "present a frame");
+                        }
+                    }
+                });
             }
         } finally {
             // Even if submitting failed, this command buffer is finished; the next frame starts a fresh one.
@@ -741,6 +900,8 @@ final class VulkanDevice {
 
     void destroy() {
         if (device != null) {
+            drainSubmits();
+            submitter.shutdown();
             vkDeviceWaitIdle(device);
             savePipelineCache();
             for (List<Runnable> work : deferred) {
@@ -748,6 +909,8 @@ final class VulkanDevice {
                 work.clear();
             }
             for (long s : renderDone) vkDestroySemaphore(device, s, null);
+            for (long v : swapViews) vkDestroyImageView(device, v, null);
+            swapViews = new long[0];
             for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
                 if (imageReady[i] != 0) vkDestroySemaphore(device, imageReady[i], null);
                 if (frameDone[i] != 0) vkDestroyFence(device, frameDone[i], null);

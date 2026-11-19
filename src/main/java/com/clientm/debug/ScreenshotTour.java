@@ -173,6 +173,7 @@ public final class ScreenshotTour {
     private static final boolean FLY = "benchfly".equals(System.getenv("CLIENTM_TOUR"));
     private double flyX, flyY, flyZ;
     private long benchStart, lastFrame;
+    private boolean benchShot;
     private float baseYaw;
     private final int[] frameNanos = new int[400000];
     private int frames;
@@ -190,6 +191,12 @@ public final class ScreenshotTour {
         if (frames < frameNanos.length) frameNanos[frames++] = (int) Math.min(Integer.MAX_VALUE, now - lastFrame);
         lastFrame = now;
         float secs = (now - benchStart) / 1e9f;
+        // CLIENTM_BENCH_SHOT=seconds: one screenshot that far into the benchmark (to compare renderers).
+        String shotAt = System.getenv("CLIENTM_BENCH_SHOT");
+        if (shotAt != null && !benchShot && secs >= Float.parseFloat(shotAt)) {
+            benchShot = true;
+            shot("bench-" + shotAt + "s");
+        }
         if (FLY) {
             // Fly out in a straight line for 10 seconds and back for 10, so new chunks load the whole time.
             if (flyY == 0) {
