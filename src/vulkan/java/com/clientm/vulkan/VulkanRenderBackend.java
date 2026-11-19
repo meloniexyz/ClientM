@@ -411,6 +411,15 @@ public final class VulkanRenderBackend extends RenderBackend {
         }
     }
 
+    /**
+     * The device already keeps the CPU at most two frames ahead of the graphics card (each frame waits for the one
+     * two before it), so Angelica's own render-ahead fences would only add waiting on top.
+     */
+    @Override
+    public boolean hasSwapchainBackpressure() {
+        return true;
+    }
+
     /** Angelica calls this once per game frame, after the game has drawn it: the frame is shown. */
     @Override
     public void onFrameEnd() {

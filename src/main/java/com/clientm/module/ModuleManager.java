@@ -149,6 +149,40 @@ public class ModuleManager {
         com.clientm.module.impl.HitFixModule.frame();
     }
 
+    /**
+     * ClientM's best-performance values for Angelica, written once per game folder (a marker file remembers it, so
+     * whatever the player changes afterwards is kept): no CPU render-ahead (Angelica's default of 3 lets the CPU run
+     * up to three frames ahead, adding waits and input delay) and no translucency sorting (it re-sorts water and glass
+     * as the camera moves, costing chunk-build time).
+     */
+    private void applyTunedDefaults() {
+        java.io.File marker = new java.io.File(Minecraft.getMinecraft().mcDataDir, "config/.clientm-tuned-defaults-1");
+        if (marker.exists()) return;
+        for (Module m : all) {
+            if (!m.id.equals("chunks")) continue;
+            m.enabled = true;
+            for (com.clientm.setting.Setting s : m.settings)
+                if (s.id.equals("renderAhead")) ((com.clientm.setting.IntSetting) s).set(0);
+        }
+        if (com.clientm.compat.AngelicaBridge.available()) {
+            boolean a = com.clientm.compat.AngelicaBridge.set("performance", "cpuRenderAheadLimit", 0);
+            a |= com.clientm.compat.AngelicaBridge.set("performance", "translucencySorting", false);
+            if (a) com.clientm.compat.AngelicaBridge.save();
+        }
+        save();
+        try {
+            marker.getParentFile()
+                .mkdirs();
+            java.nio.file.Files.write(
+                marker.toPath(),
+                "ClientM applied its tuned Angelica defaults here once.\n"
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.io.IOException e) {
+            ClientM.LOG.warn("Could not write {}: {}", marker, e.toString());
+        }
+        ClientM.LOG.info("Applied ClientM's tuned Angelica defaults (render-ahead 0, translucency sorting off)");
+    }
+
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
@@ -163,6 +197,7 @@ public class ModuleManager {
         if (!appliedOnJoin) {
             // Saved settings that reach into other mods are applied once the game is fully up.
             appliedOnJoin = true;
+            applyTunedDefaults();
             for (Module m : all) if (m.enabled) m.onSettingsChanged();
         }
         for (Module m : all) if (m.enabled || editing) m.onTick();
