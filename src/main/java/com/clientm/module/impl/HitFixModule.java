@@ -25,6 +25,7 @@ import com.clientm.mixins.AccessorNetworkManager;
 import com.clientm.module.Category;
 import com.clientm.module.Module;
 import com.clientm.setting.BoolSetting;
+import com.clientm.setting.IntSetting;
 
 /**
  * Takes the 50 ms game tick out of both directions of a fight.
@@ -60,12 +61,22 @@ public class HitFixModule extends Module {
     private final BoolSetting knockback = add(new BoolSetting("knockback", "Knockback (self knockback)", true));
     private final BoolSetting heads = add(new BoolSetting("heads", "Player head movement", true));
     private final BoolSetting hurtCamera17 = add(new BoolSetting("hurtcam17", "1.7 hurt camera", true));
-    private final BoolSetting instantClicks = add(new BoolSetting("clicks", "Instant clicks", true));
+    // Off by default: they send hits and right-clicks between two movement packets instead of in the vanilla order,
+    // which strict anticheats (Grim's "Post", Vulcan and similar BadPackets checks) can flag.
+    private final BoolSetting instantClicks = add(
+        new BoolSetting("instantAttack", "Instant clicks (risky: strict anticheats may flag)", false));
+    private final BoolSetting instantUse = add(
+        new BoolSetting("instantUse", "Instant right-clicks (risky: strict anticheats may flag)", false));
+    private final IntSetting smoothing = add(
+        new IntSetting("smoothing", "Enemy movement smoothing (ticks, vanilla 3)", 2, 1, 3));
     private final BoolSetting noDelay = add(new BoolSetting("nodelay", "Send packets immediately", true));
     private final BoolSetting rawInput = add(new BoolSetting("rawinput", "Raw mouse input", true));
 
     /** Time stamps of attack presses already carried out on their frame, which the game tick must not count again. */
     private final java.util.Set<Long> handled = new java.util.HashSet<>();
+    /** The same, for right-clicks. */
+    private final java.util.Set<Long> handledUse = new java.util.HashSet<>();
+    private long lastUseNanos;
     private boolean clicking;
     private Object noDelayChannel;
     private Boolean rawApplied;
@@ -84,7 +95,7 @@ public class HitFixModule extends Module {
 
     @Override
     public String description() {
-        return "Server updates and your clicks on every frame instead of every tick";
+        return "Server updates on every frame instead of every tick; instant clicks are opt-in (anticheat risk)";
     }
 
     /**
@@ -99,11 +110,22 @@ public class HitFixModule extends Module {
             org.lwjgl.input.Mouse.getEventNanoseconds(),
             org.lwjgl.input.Mouse.getEventButton(),
             org.lwjgl.input.Mouse.getEventButtonState());
-        if (m == null || m.handled.isEmpty() || keyCode != m.mc.gameSettings.keyBindAttack.getKeyCode()) return false;
+        if (m == null) return false;
+        java.util.Set<Long> set = keyCode == m.mc.gameSettings.keyBindAttack.getKeyCode() ? m.handled
+            : keyCode == m.mc.gameSettings.keyBindUseItem.getKeyCode() ? m.handledUse : null;
+        if (set == null || set.isEmpty()) return false;
         long nanos = org.lwjgl.input.Mouse.getEventNanoseconds();
-        if (!m.handled.remove(nanos)) return false;
+        if (!set.remove(nanos)) return false;
         if (DEBUG) ClientM.LOG.info("CLICKDBG tick skips press {}", nanos);
         return true;
+    }
+
+    /** For the click test tour: right-click actions, and how many of them happened on their frame. */
+    public static volatile int uses, earlyUses;
+
+    /** Called whenever the game's right-click action runs (counted for the click test tour). */
+    public static void useAction() {
+        uses++;
     }
 
     /** Called whenever the game's left-click action runs (counted for the click test tour). */
@@ -120,11 +142,22 @@ public class HitFixModule extends Module {
         HitFixModule m = instance;
         if (m == null) return;
         // A press the tick never read (for example cancelled by another mod) is forgotten after a second.
-        if (!m.handled.isEmpty()) {
+        if (!m.handled.isEmpty() || !m.handledUse.isEmpty()) {
             long old = System.nanoTime() - 1_000_000_000L;
             m.handled.removeIf(n -> n < old);
+            m.handledUse.removeIf(n -> n < old);
         }
         m.syncRawInput();
+    }
+
+    /**
+     * How many ticks an enemy takes to slide to the position the server sent (vanilla 3, about 150 ms). Fewer ticks
+     * show players, and the hitboxes you aim at, closer to where the server has them. Only what you see changes;
+     * nothing is sent differently. See MixinNetHandlerPlayClient_Smoothing.
+     */
+    public static int smoothingTicks(int vanilla) {
+        HitFixModule m = instance;
+        return m != null && m.enabled ? Math.min(vanilla, m.smoothing.value) : vanilla;
     }
 
     /** Whether the hurt camera should keep its 1.7 look; see MixinEntityRenderer_HurtCam17. */
@@ -153,9 +186,9 @@ public class HitFixModule extends Module {
      * the game has received but not read yet; they stay there, and the tick skips them when it reads them.
      */
     private void instantClick() {
+        if (!enabled || !instantClicks.value && !instantUse.value) return;
         int key = mc.gameSettings.keyBindAttack.getKeyCode();
-        if (key >= 0 || key + 100 < 0) return; // attack is on a keyboard key
-        int button = key + 100;
+        int button = key < 0 && key + 100 >= 0 ? key + 100 : -1; // -1: attack is on a keyboard key
         try {
             if (queueField == null) {
                 Class<?> mouse = Class.forName("org.lwjglx.input.Mouse");
@@ -178,29 +211,39 @@ public class HitFixModule extends Module {
                 read = readField.getInt(queue);
                 max = maxField.getInt(queue);
             }
-            boolean act = enabled && instantClicks.value
-                && mc.thePlayer != null
+            boolean ready = enabled && mc.thePlayer != null
                 && mc.theWorld != null
                 && mc.playerController != null
                 && mc.currentScreen == null
                 && mc.inGameHasFocus;
+            int use = mc.gameSettings.keyBindUseItem.getKeyCode() + 100;
             for (int i = 0; i < count; i++) {
                 // The queue moves its read position before reading, so unread event i sits one slot further on.
                 int pos = (read + 1 + i) % max;
-                if (buttons[pos] != button || !states[pos] || nanos[pos] <= lastPressNanos) continue;
-                lastPressNanos = nanos[pos];
-                // While eating, drinking or blocking the game ignores attack clicks; the tick does that as usual.
-                if (!act || mc.thePlayer.isUsingItem()) continue;
-                clicking = true;
-                try {
-                    lastSwingNs = System.nanoTime();
-                    swings++;
-                    ((com.clientm.mixins.AccessorMinecraft_Click) mc).clientm$attackClick();
-                    handled.add(nanos[pos]);
-                    if (DEBUG) ClientM.LOG
-                        .info("CLICKDBG early click {} pos {} read {} count {}", nanos[pos], pos, read, count);
-                } finally {
-                    clicking = false;
+                if (!states[pos]) continue;
+                if (buttons[pos] == button && nanos[pos] > lastPressNanos) {
+                    lastPressNanos = nanos[pos];
+                    // While eating, drinking or blocking the game ignores attack clicks; the tick does that as usual.
+                    if (!ready || !instantClicks.value || mc.thePlayer.isUsingItem()) continue;
+                    clicking = true;
+                    try {
+                        lastSwingNs = System.nanoTime();
+                        swings++;
+                        ((com.clientm.mixins.AccessorMinecraft_Click) mc).clientm$attackClick();
+                        handled.add(nanos[pos]);
+                        if (DEBUG) ClientM.LOG.info("CLICKDBG early click {}", nanos[pos]);
+                    } finally {
+                        clicking = false;
+                    }
+                } else if (use >= 0 && buttons[pos] == use && nanos[pos] > lastUseNanos) {
+                    lastUseNanos = nanos[pos];
+                    // Rod casts, potion throws and sword blocking, the same way; holding the button still repeats
+                    // at the vanilla rate, from the game tick.
+                    if (!ready || !instantUse.value || mc.thePlayer.isUsingItem()) continue;
+                    earlyUses++;
+                    ((com.clientm.mixins.AccessorMinecraft_Click) mc).clientm$useClick();
+                    handledUse.add(nanos[pos]);
+                    if (DEBUG) ClientM.LOG.info("CLICKDBG early use {}", nanos[pos]);
                 }
             }
         } catch (Throwable t) {

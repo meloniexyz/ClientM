@@ -196,9 +196,11 @@ public final class ScreenshotTour {
         if (clickAt != 0) {
             long swing = com.clientm.module.impl.HitFixModule.lastSwingNs;
             int n = com.clientm.module.impl.HitFixModule.swings;
-            if (swing >= clickAt && clickDelays[clickPhase][clickNo] == 0)
-                clickDelays[clickPhase][clickNo] = swing - clickAt;
-            clickSwings[clickPhase][clickNo] = n;
+            if (clickPhase < 2) {
+                if (swing >= clickAt && clickDelays[clickPhase][clickNo] == 0)
+                    clickDelays[clickPhase][clickNo] = swing - clickAt;
+                clickSwings[clickPhase][clickNo] = n;
+            }
             if (releaseAt == 0 && now - clickAt > 30_000_000L) {
                 injectClick(false);
                 releaseAt = now;
@@ -206,9 +208,9 @@ public final class ScreenshotTour {
             if (now - clickAt < 200_000_000L) return; // let the click finish and every tick see it
             clickAt = 0;
             releaseAt = 0;
-            if (++clickNo == 40) {
+            if (++clickNo == (clickPhase == 2 ? 20 : 40)) {
                 clickNo = 0;
-                if (++clickPhase == 2) {
+                if (++clickPhase == 3) {
                     clicking = false;
                     reportClicks();
                     mc.shutdown();
@@ -220,7 +222,13 @@ public final class ScreenshotTour {
             return;
         }
         if (now < nextClickAt) return;
-        setOption(hitfix, "clicks", clickPhase == 0);
+        setOption(hitfix, "instantAttack", clickPhase == 0);
+        setOption(hitfix, "instantUse", clickPhase == 2);
+        if (clickPhase == 2) {
+            // Right-clicks with an empty hand: the action runs, and nothing is used up or held down.
+            mc.thePlayer.inventory.currentItem = 8;
+            clickButton = 1;
+        }
         com.clientm.module.impl.HitFixModule.swings = 0;
         com.clientm.module.impl.HitFixModule.lastSwingNs = 0;
         clickAt = System.nanoTime();
@@ -228,11 +236,13 @@ public final class ScreenshotTour {
     }
 
     /** Puts a left-button event into lwjgl3ify's mouse queue, as if the button had been pressed or released. */
+    private static int clickButton;
+
     private static void injectClick(boolean down) {
         try {
             Class<?> mouse = Class.forName("org.lwjglx.input.Mouse");
             mouse.getMethod("addButtonEvent", int.class, boolean.class)
-                .invoke(null, 0, down);
+                .invoke(null, clickButton, down);
             ClientM.LOG.info("CLICKDBG injected {} at {}", down ? "press" : "release", System.nanoTime());
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("The click test needs lwjgl3ify", e);
@@ -246,6 +256,11 @@ public final class ScreenshotTour {
 
     private void reportClicks() {
         StringBuilder out = new StringBuilder();
+        out.append(
+            String.format(
+                "instant right-clicks ON: 20 right-clicks, %d use actions, %d of them on the click's frame%n",
+                com.clientm.module.impl.HitFixModule.uses,
+                com.clientm.module.impl.HitFixModule.earlyUses));
         String[] names = { "instant clicks ON ", "instant clicks OFF" };
         for (int ph = 0; ph < 2; ph++) {
             long[] d = clickDelays[ph].clone();

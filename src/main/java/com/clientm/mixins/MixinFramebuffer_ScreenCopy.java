@@ -44,8 +44,8 @@ public abstract class MixinFramebuffer_ScreenCopy {
         }
     }
 
-    // func_147615_c: framebufferRender(width, height)
-    @Inject(method = "func_147615_c", at = @At("HEAD"))
+    // framebufferRender(width, height) (func_147615_c)
+    @Inject(method = "framebufferRender", at = @At("HEAD"))
     private void clientm$screenFromFramebuffer(int width, int height, CallbackInfo ci) {
         clientm$taken = false;
         Minecraft mc = Minecraft.getMinecraft();
@@ -62,7 +62,7 @@ public abstract class MixinFramebuffer_ScreenCopy {
         }
     }
 
-    @Inject(method = "func_147615_c", at = @At("RETURN"))
+    @Inject(method = "framebufferRender", at = @At("RETURN"))
     private void clientm$screenCopyDone(int width, int height, CallbackInfo ci) {
         if (!clientm$taken || clientm$done == null) return;
         clientm$taken = false;

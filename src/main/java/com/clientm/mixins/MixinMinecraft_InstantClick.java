@@ -18,4 +18,10 @@ public abstract class MixinMinecraft_InstantClick {
     private void clientm$noteClick(CallbackInfo ci) {
         HitFixModule.clickAction();
     }
+
+    // func_147121_ag: the right-click action
+    @Inject(method = "func_147121_ag", at = @At("HEAD"))
+    private void clientm$noteUse(CallbackInfo ci) {
+        HitFixModule.useAction();
+    }
 }

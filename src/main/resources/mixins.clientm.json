@@ -25,6 +25,7 @@
     "MixinMinecraft_InstantClick",
     "MixinKeyBinding_InstantClick",
     "MixinFramebuffer_ScreenCopy",
+    "MixinNetHandlerPlayClient_Smoothing",
     "AccessorMinecraft_Session",
     "MixinEntityRenderer_HurtCam17",
     "MixinResourcePackRepository_Folders",
