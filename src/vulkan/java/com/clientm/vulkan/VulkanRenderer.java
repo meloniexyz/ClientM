@@ -317,6 +317,37 @@ final class VulkanRenderer {
     }
 
     private void clearLocked(GLResources.Ctx c, int mask) {
+        if (c.drawFramebuffer == 0 && screenSource != null) {
+            if (droppingScreenCopy) return;
+            materializeScreen();
+        }
+        // A whole-screen clear is kept back: Minecraft clears the screen at the start of every frame and then covers
+        // it with its framebuffer, so the clear only has to happen if something else draws on the screen.
+        if (c.drawFramebuffer == 0 && !c.state.scissorTest && dev.directTarget() == null) {
+            RenderState st = c.state;
+            boolean wantColor = (mask & 0x4000) != 0;
+            // Only plain whole-screen clears are kept back; a colour clear with some channels masked is done now.
+            if (!wantColor || st.colorMask[0] && st.colorMask[1] && st.colorMask[2]) {
+                endRendering(); // a later draw into the screen must start a new pass, after the clear
+                if (wantColor) {
+                    pendingScreenClear |= 0x4000;
+                    pendingClearColor[0] = c.clearR;
+                    pendingClearColor[1] = c.clearG;
+                    pendingClearColor[2] = c.clearB;
+                    pendingClearColor[3] = c.clearA;
+                }
+                if ((mask & 0x0100) != 0 && st.depthMask) {
+                    pendingScreenClear |= 0x0100;
+                    pendingClearDepth = c.clearDepth;
+                }
+                if ((mask & 0x0400) != 0) {
+                    pendingScreenClear |= 0x0400;
+                    pendingClearStencil = c.clearStencil;
+                }
+                return;
+            }
+        }
+        if (c.drawFramebuffer == 0) applyScreenClear();
         int fb = c.drawFramebuffer;
         if (!beginRendering(fb)) return;
         RenderState s = c.state;
@@ -391,6 +422,11 @@ final class VulkanRenderer {
         if (vao == null) return;
         synchronized (res.lock) {
             if (Stats.ON) Stats.draws++;
+            if (c.drawFramebuffer == 0) {
+                if (droppingScreenCopy) return;
+                if (screenSource != null) materializeScreen();
+                else applyScreenClear();
+            }
             blank(); // created before rendering starts: creating an image ends rendering
             if (res.hasPendingUploads() && samplesPending(c, p)) res.flushUploads();
             if (!beginRendering(c.drawFramebuffer)) return;
@@ -1304,8 +1340,95 @@ final class VulkanRenderer {
 
     /** The image a framebuffer reads colour from (glReadBuffer), with its level. */
     /** The image framebuffer 0 is drawn into this frame: the window's own (flipped) or the screen image. */
+    /**
+     * When Minecraft copies its framebuffer to the screen (Framebuffer.framebufferRender), the copy is not drawn:
+     * this frame's screen simply is that framebuffer's image, and the window is filled from it directly. Anything
+     * that draws into or reads the screen later in the frame first gets the real copy (see {@link #materializeScreen}).
+     */
+    private VulkanImage screenSource;
+    /** Set while framebufferRender runs: its full-screen draw into the screen is then left out. */
+    private boolean droppingScreenCopy;
+
+    /** Called by the main mod before Minecraft copies its framebuffer (texture) to the screen. */
+    boolean screenFromTexture(int texture) {
+        synchronized (res.lock) {
+            res.ensureScreen();
+            GLResources.GLTexture tex = res.textures.get(texture);
+            if (tex == null || tex.image == null
+                || tex.image.depth
+                || tex.image.width != res.screenColor.width
+                || tex.image.height != res.screenColor.height
+                || dev.directTarget() != null) return false;
+            screenSource = tex.image;
+            droppingScreenCopy = true;
+            return true;
+        }
+    }
+
+    /** Called by the main mod after Minecraft's framebuffer copy. */
+    void screenCopyDone() {
+        droppingScreenCopy = false;
+    }
+
+    // A whole-screen clear not done yet (see clearLocked): which parts, and the values
+    private int pendingScreenClear;
+    private final float[] pendingClearColor = new float[4];
+    private float pendingClearDepth = 1f;
+    private int pendingClearStencil;
+
+    /** Does a kept-back screen clear now, before something draws on or reads the screen. */
+    private void applyScreenClear() {
+        int m = pendingScreenClear;
+        if (m == 0) return;
+        pendingScreenClear = 0;
+        res.ensureScreen();
+        res.clearImages(
+            res.screenColor,
+            res.screenDepth,
+            (m & 0x4000) != 0,
+            pendingClearColor.clone(),
+            (m & 0x0100) != 0,
+            pendingClearDepth,
+            (m & 0x0400) != 0,
+            pendingClearStencil);
+    }
+
+    /** Makes the screen image hold the framebuffer copy for real, before anything else touches the screen. */
+    private void materializeScreen() {
+        VulkanImage source = screenSource;
+        if (source == null || droppingScreenCopy) return;
+        applyScreenClear(); // its depth part still matters; the colour is covered by the copy below
+        screenSource = null;
+        blitImage(
+            source,
+            0,
+            res.screenColor,
+            0,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            0,
+            0,
+            source.width,
+            source.height,
+            0,
+            0,
+            source.width,
+            source.height,
+            VK_FILTER_NEAREST);
+    }
+
+    /** The image to show this frame, after which the screen goes back to normal. */
+    VulkanImage takeShownScreen() {
+        if (screenSource != null) pendingScreenClear = 0; // covered by the framebuffer, never seen
+        else applyScreenClear();
+        VulkanImage shown = screenSource != null ? screenSource : res.screenColor;
+        screenSource = null;
+        droppingScreenCopy = false;
+        return shown;
+    }
+
     private VulkanImage screenImage() {
         res.ensureScreen();
+        if (screenSource != null) return screenSource;
         VulkanImage window = dev.directTarget();
         return window != null && window.width == res.screenDepth.width && window.height == res.screenDepth.height
             ? window
@@ -1314,7 +1437,12 @@ final class VulkanRenderer {
 
     private VulkanImage readColor(int framebuffer, int[] level) {
         level[0] = 0;
-        if (framebuffer == 0) return screenImage();
+        if (framebuffer == 0) {
+            materializeScreen();
+            applyScreenClear();
+            applyScreenClear();
+            return screenImage();
+        }
         Framebuffer fb = framebuffers.get(framebuffer);
         if (fb == null) return null;
         int i = fb.readBuffer >= 0 && fb.readBuffer < 8 ? fb.readBuffer : 0;
@@ -1325,6 +1453,7 @@ final class VulkanRenderer {
     private VulkanImage drawColor(int framebuffer, int[] level) {
         level[0] = 0;
         if (framebuffer == 0) {
+            materializeScreen();
             VulkanImage window = dev.acquireTarget();
             return window != null && window.width == res.screenDepth.width && window.height == res.screenDepth.height
                 ? window
@@ -1544,7 +1673,7 @@ final class VulkanRenderer {
         if (benching && benchStart < 0) benchStart = frame;
         boolean benchShot = benching && BENCH_SHOTS.contains(frame - benchStart);
         if (!SHOTS.contains(frame) && !benchShot || res.screenColor == null) return;
-        VulkanImage img = screenImage();
+        VulkanImage img = screenSource != null ? screenSource : screenImage();
         shotTopDown = img == dev.directTarget();
         shotBgra = img.format == VK_FORMAT_B8G8R8A8_UNORM;
         endRendering();

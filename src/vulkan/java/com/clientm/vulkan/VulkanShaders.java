@@ -214,11 +214,26 @@ final class VulkanShaders {
         }
     }
 
+    /**
+     * Angelica's HUD caching pastes the cached HUD over the whole screen every frame, colour and depth, for all ~2
+     * million pixels, although most of the screen has no HUD at all. Where the cached HUD is fully transparent the
+     * result would not change the colour, so those pixels are dropped; this skips their colour and depth writes,
+     * which is most of the pass. (The depth left there is the world's instead of the cleared HUD depth: nothing reads
+     * it, since a menu clears depth before it draws.)
+     */
+    static String hudComposite(String raw) {
+        String line = "fragColor = texture(u_Texture, v_TexCoord);";
+        if (!raw.contains("uniform sampler2D u_Depth") || !raw.contains("gl_FragDepth") || !raw.contains(line))
+            return raw;
+        return raw.replace(line, line + "\n    if (fragColor.a <= 0.0) discard;");
+    }
+
     void compile(GLShader s) {
         long t0 = System.nanoTime();
         loadCache();
         String raw = s.source;
         if (!raw.isEmpty() && raw.charAt(raw.length() - 1) == 0) raw = raw.substring(0, raw.length() - 1);
+        raw = hudComposite(raw);
         String key = cacheKey(raw, s.type);
         byte[] cached = key == null ? null : CACHED_SPIRV.get(key);
         if (cached != null && cached.length >= 20 && cached.length % 4 == 0) {

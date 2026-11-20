@@ -51,6 +51,22 @@ public final class VulkanGate {
         return !(v.startsWith("opengl") || v.equals("gl"));
     }
 
+    /**
+     * Called by the main mod (MixinFramebuffer_ScreenCopy) before Minecraft copies its framebuffer to the screen.
+     * True when the Vulkan renderer will show that framebuffer directly, so the copy's draw is left out.
+     */
+    public static boolean screenFromTexture(int texture) {
+        if (!engaged) return false;
+        Object backend = com.gtnewhorizons.angelica.glsm.backend.BackendManager.RENDER_BACKEND;
+        return backend instanceof VulkanRenderBackend && ((VulkanRenderBackend) backend).screenFromTexture(texture);
+    }
+
+    /** Called by the main mod after Minecraft's framebuffer copy to the screen. */
+    public static void screenCopyDone() {
+        Object backend = com.gtnewhorizons.angelica.glsm.backend.BackendManager.RENDER_BACKEND;
+        if (backend instanceof VulkanRenderBackend) ((VulkanRenderBackend) backend).screenCopyDone();
+    }
+
     /** True once the window belongs to Vulkan; the backend reports itself available only then. */
     public static boolean isEngaged() {
         return engaged;

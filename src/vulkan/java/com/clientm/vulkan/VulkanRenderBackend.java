@@ -420,6 +420,15 @@ public final class VulkanRenderBackend extends RenderBackend {
         return true;
     }
 
+    /** See VulkanRenderer.screenFromTexture. */
+    boolean screenFromTexture(int texture) {
+        return rnd().screenFromTexture(texture);
+    }
+
+    void screenCopyDone() {
+        rnd().screenCopyDone();
+    }
+
     /** Angelica calls this once per game frame, after the game has drawn it: the frame is shown. */
     @Override
     public void onFrameEnd() {
@@ -428,7 +437,7 @@ public final class VulkanRenderBackend extends RenderBackend {
             r.ensureScreen();
             VulkanRenderer v = rnd();
             v.captureBeforePresent();
-            r.dev.endFrame(r.screenColor);
+            r.dev.endFrame(v.takeShownScreen());
             v.captureAfterPresent();
             if (Stats.ON) Stats.frame();
         }
