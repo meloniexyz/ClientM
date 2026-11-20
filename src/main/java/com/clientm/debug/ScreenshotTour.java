@@ -572,6 +572,101 @@ public final class ScreenshotTour {
         }
     }
 
+    /** CLIENTM_TOUR=chat: stacked repeats, timestamps, longer history and hiding the chat. */
+    private void chatTest() {
+        wait = 20;
+        net.minecraft.client.gui.GuiNewChat chat = mc.ingameGUI.getChatGUI();
+        Module m = module("chat");
+        switch (step++) {
+            case 0: {
+                noonAndClear();
+                m.setEnabled(true);
+                if ("1".equals(System.getenv("CLIENTM_NO_HUD_CACHE"))) module("hudcaching").setEnabled(false);
+                setBool(m, "show", true);
+                setBool(m, "timestamps", false);
+                setBool(m, "stack", true);
+                chat.clearChatMessages();
+                for (int i = 0; i < 3; i++) chat.printChatMessage(new net.minecraft.util.ChatComponentText("hello"));
+                chat.printChatMessage(new net.minecraft.util.ChatComponentText("world"));
+                return;
+            }
+            case 1: {
+                java.util.List<?> lines = chatLines(chat);
+                String first = lines.size() > 1 ? lineText(lines.get(1)) : "?";
+                chatReport.append("stack: ")
+                    .append(lines.size())
+                    .append(" lines, first = '")
+                    .append(first)
+                    .append("'\n");
+                shot("chat-1-stacked");
+                setBool(m, "timestamps", true);
+                chat.printChatMessage(new net.minecraft.util.ChatComponentText("timed"));
+                return;
+            }
+            case 2: {
+                chatReport.append("timestamp: '")
+                    .append(lineText(chatLines(chat).get(0)))
+                    .append("'\n");
+                setBool(m, "timestamps", false);
+                for (int i = 0; i < 250; i++)
+                    chat.printChatMessage(new net.minecraft.util.ChatComponentText("line " + i));
+                chatReport.append("history: ")
+                    .append(chatLines(chat).size())
+                    .append(" lines kept\n");
+                setBool(m, "show", false);
+                return;
+            }
+            case 3:
+                shot("chat-2-hidden");
+                setBool(m, "background", true);
+                setBool(m, "shadow", false);
+                chat.printChatMessage(new net.minecraft.util.ChatComponentText("background on, no shadow"));
+                chatReport.append("hidden: visible() = ")
+                    .append(com.clientm.module.impl.ChatModule.visible())
+                    .append('\n');
+                setBool(m, "show", true);
+                return;
+            case 4: {
+                shot("chat-3-plain");
+                setBool(m, "background", false);
+                setBool(m, "shadow", true);
+                try {
+                    java.nio.file.Files.write(
+                        new java.io.File(mc.mcDataDir, "clientm-chat.txt").toPath(),
+                        chatReport.toString()
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                } catch (java.io.IOException e) {
+                    ClientM.LOG.error("Could not write the chat test result", e);
+                }
+                ClientM.LOG.info("Chat test:\n{}", chatReport);
+                mc.shutdown();
+            }
+        }
+    }
+
+    private final StringBuilder chatReport = new StringBuilder();
+
+    private static void setBool(Module m, String id, boolean v) {
+        for (com.clientm.setting.Setting s : m.settings)
+            if (s.id.equals(id)) ((com.clientm.setting.BoolSetting) s).value = v;
+        m.onSettingsChanged();
+    }
+
+    private static java.util.List<?> chatLines(net.minecraft.client.gui.GuiNewChat chat) {
+        try {
+            java.lang.reflect.Field f = net.minecraft.client.gui.GuiNewChat.class.getDeclaredField("chatLines");
+            f.setAccessible(true);
+            return (java.util.List<?>) f.get(chat);
+        } catch (ReflectiveOperationException e) {
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    private static String lineText(Object line) {
+        return ((net.minecraft.client.gui.ChatLine) line).func_151461_a()
+            .getUnformattedText();
+    }
+
     /** Logs how Angelica's GL state manager sees the game thread (which context lookup path it takes). */
     static void glsmDiag() {
         try {
@@ -912,6 +1007,10 @@ public final class ScreenshotTour {
             worldTest();
             return;
         }
+        if ("chat".equals(System.getenv("CLIENTM_TOUR"))) {
+            chatTest();
+            return;
+        }
         if ("features".equals(System.getenv("CLIENTM_TOUR"))) {
             if (step++ > 0) return; // set up once; onFeatureTest drives the rest
             noonAndClear();
@@ -965,8 +1064,10 @@ public final class ScreenshotTour {
                     p.sendPlayerAbilities();
                 }
                 String speed = System.getenv("CLIENTM_BENCH_SPEED");
-                if (speed != null) {
+                if ("off".equals(speed)) module("lazychunks").setEnabled(false);
+                else if (speed != null) {
                     Module lazy = module("lazychunks");
+                    lazy.setEnabled(true);
                     for (com.clientm.setting.Setting s : lazy.settings)
                         if (s.id.equals("speed")) ((com.clientm.setting.IntSetting) s).set(Integer.parseInt(speed));
                     lazy.onSettingsChanged();

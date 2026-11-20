@@ -53,7 +53,20 @@ async function download(item, name) {
   zip.addFile(
     '.minecraft/config/hodgepodge.cfg',
     Buffer.from(
-      ['# Configuration file', '', 'speedups {', '    B:directTileEntityArraySerialization=false', '}', ''].join('\n'),
+      [
+        '# Configuration file',
+        '',
+        'speedups {',
+        '    B:directTileEntityArraySerialization=false',
+        '}',
+        '',
+        // ClientM's Chat module does transparent and compact chat itself (see HODGEPODGE_FORCED in src/install.js)
+        'tweaks {',
+        '    B:transparentChat=false',
+        '    B:compactChat=false',
+        '}',
+        '',
+      ].join('\n'),
     ),
   );
 

@@ -129,13 +129,29 @@ async function installMods(root, manifest, resourcesDir, progress) {
 }
 
 /**
- * Hodgepodge's "direct tile entity array serialization" changes the format of one network packet. It only works
- * when the server runs Hodgepodge too; on any other server the client misreads the packet and is disconnected.
- * ClientM is for playing on ordinary servers, so it is always switched off here.
+ * Hodgepodge options ClientM needs set a certain way. Hodgepodge decides at startup whether these features exist at
+ * all, so they are written to its config before the game starts:
+ * - "direct tile entity array serialization" changes the format of one network packet. It only works when the server
+ *   runs Hodgepodge too; on any other server the client misreads the packet and is disconnected.
+ * - "transparent chat" and "compact chat" are done by ClientM's Chat module instead (its "Chat background" and "Stack
+ *   repeated messages" options), so they can be switched in game.
  */
+const HODGEPODGE_FORCED = [
+  ['speedups', 'B:directTileEntityArraySerialization=', 'false'],
+  ['tweaks', 'B:transparentChat=', 'false'],
+  ['tweaks', 'B:compactChat=', 'false'],
+];
+
+function hodgepodgeConfig() {
+  const sections = {};
+  for (const [section, key, value] of HODGEPODGE_FORCED) (sections[section] = sections[section] || []).push(key + value);
+  const lines = ['# Configuration file', ''];
+  for (const [section, keys] of Object.entries(sections)) lines.push(section + ' {', ...keys.map((k) => '    ' + k), '}', '');
+  return lines.join('\n');
+}
+
 async function fixServerCompatibility(gameDir) {
   const file = path.join(gameDir, 'config', 'hodgepodge.cfg');
-  const key = 'B:directTileEntityArraySerialization=';
   let text = null;
   try {
     text = await fsp.readFile(file, 'utf8');
@@ -144,10 +160,15 @@ async function fixServerCompatibility(gameDir) {
   }
   if (text === null) {
     await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(file, ['# Configuration file', '', 'speedups {', '    ' + key + 'false', '}', ''].join('\n'));
-  } else if (text.includes(key + 'true')) {
-    await fsp.writeFile(file, text.replace(key + 'true', key + 'false'));
+    await fsp.writeFile(file, hodgepodgeConfig());
+    return;
   }
+  let changed = text;
+  for (const [, key, value] of HODGEPODGE_FORCED) {
+    const other = key + (value === 'false' ? 'true' : 'false');
+    if (changed.includes(other)) changed = changed.replace(other, key + value);
+  }
+  if (changed !== text) await fsp.writeFile(file, changed);
 }
 
 /**
@@ -262,4 +283,4 @@ async function install(root, manifest, resourcesDir, progress) {
   return { version, classpath, nativesDir, assetsDir, java, logConfig, logArgument: lf && lf.argument, gameDir: path.join(root, 'game') };
 }
 
-module.exports = { install, allowed, VERSION_ID };
+module.exports = { install, allowed, VERSION_ID, hodgepodgeConfig };

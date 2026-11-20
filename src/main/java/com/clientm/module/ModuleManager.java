@@ -108,6 +108,7 @@ public class ModuleManager {
         register(new com.clientm.module.impl.HitMarkerModule());
         register(new com.clientm.module.impl.ZoomModule());
         register(new com.clientm.module.impl.CrosshairModule());
+        register(new com.clientm.module.impl.ChatModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
