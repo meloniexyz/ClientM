@@ -246,8 +246,7 @@ ipcMain.handle('play', async (e, opts) => {
   const inst = await install(root, manifest, resourcesDir, (text, fraction) => send('progress', { text, fraction }));
   // The game reads its renderer from this file at start-up (Vulkan when it is missing).
   fs.mkdirSync(path.join(inst.gameDir, 'config'), { recursive: true });
-  fs.writeFileSync(path.join(inst.gameDir, 'config', 'clientm-renderer.txt'), s.renderer + '
-');
+  fs.writeFileSync(path.join(inst.gameDir, 'config', 'clientm-renderer.txt'), s.renderer + '\n');
   send('progress', { text: 'Starting Minecraft', fraction: 1 });
   game = launch(inst, session, { heapGb: s.heapGb, jvmFlags: manifest.jvmFlags, env });
   game.on('exit', (code) => {
