@@ -225,6 +225,29 @@ public class ModuleManager {
         ClientM.LOG.info("Applied ClientM's tuned Angelica defaults (render-ahead 0, translucency sorting off)");
     }
 
+    /**
+     * Second round of tuned defaults, applied once to existing installs too: HUD caching off. Its full-screen
+     * composite costs more graphics card time than redrawing the HUD costs the processor (A/B on Vulkan: +4.8% average
+     * FPS without it, fights even).
+     */
+    private void applyTunedDefaults2() {
+        java.io.File marker = new java.io.File(Minecraft.getMinecraft().mcDataDir, "config/.clientm-tuned-defaults-2");
+        if (marker.exists()) return;
+        for (Module m : all) if (m.id.equals("hudcaching") && m.enabled) m.setEnabled(false);
+        save();
+        try {
+            marker.getParentFile()
+                .mkdirs();
+            java.nio.file.Files.write(
+                marker.toPath(),
+                "ClientM switched HUD caching off here once (it costs FPS); you can switch it back on.\n"
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.io.IOException e) {
+            ClientM.LOG.warn("Could not write {}: {}", marker, e.toString());
+        }
+        ClientM.LOG.info("Applied ClientM's tuned defaults 2 (HUD caching off)");
+    }
+
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
@@ -246,6 +269,7 @@ public class ModuleManager {
             // Saved settings that reach into other mods are applied once the game is fully up.
             appliedOnJoin = true;
             applyTunedDefaults();
+            applyTunedDefaults2();
             String reason = (String) vulkanGate("openGlReason");
             if (reason != null) chat(reason);
             for (Module m : all) if (m.enabled) m.onSettingsChanged();

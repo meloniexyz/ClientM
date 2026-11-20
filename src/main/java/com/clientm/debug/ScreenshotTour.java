@@ -669,6 +669,8 @@ public final class ScreenshotTour {
 
     /** Logs how Angelica's GL state manager sees the game thread (which context lookup path it takes). */
     static void glsmDiag() {
+        if ("1".equals(System.getenv("CLIENTM_NO_HUD_CACHE")))
+            for (Module m : ClientM.modules.all()) if (m.id.equals("hudcaching")) m.setEnabled(false);
         try {
             Class<?> c = Class.forName("com.gtnewhorizons.angelica.glsm.GLStateManager");
             StringBuilder b = new StringBuilder(

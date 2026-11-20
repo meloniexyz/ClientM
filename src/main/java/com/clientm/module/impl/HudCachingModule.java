@@ -16,12 +16,12 @@ public class HudCachingModule extends Module {
     private final IntSetting rate = add(new IntSetting("rate", "HUD updates per second", 30, 5, 60));
 
     public HudCachingModule() {
-        super("hudcaching", "HUD Caching", Category.PERFORMANCE, true);
+        super("hudcaching", "HUD Caching", Category.PERFORMANCE, false);
     }
 
     @Override
     public String description() {
-        return AngelicaBridge.available() ? "Big FPS gain with HUD mods; lower rate = faster, laggier HUD"
+        return AngelicaBridge.available() ? "Off is faster with ClientM's HUD; may help with heavy HUD mods"
             : "Needs Angelica installed";
     }
 
