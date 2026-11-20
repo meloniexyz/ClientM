@@ -192,6 +192,14 @@ final class VulkanRenderer {
             t.colors = Arrays.copyOf(colors, n);
             t.colorLevels = Arrays.copyOf(levels, n);
             t.depth = depthImage(fb);
+            boolean anyTopDown = false;
+            for (VulkanImage img : t.colors) anyTopDown |= img.topDown;
+            if (framebuffer == flippedFramebuffer || anyTopDown) {
+                // Drawn top-down, so the finished frame goes to the window as a plain copy.
+                t.flipped = true;
+                for (VulkanImage img : t.colors) img.topDown = true;
+                if (t.depth != null) t.depth.topDown = true;
+            }
         }
         long key = 17;
         int w = Integer.MAX_VALUE, h = Integer.MAX_VALUE;
@@ -317,7 +325,9 @@ final class VulkanRenderer {
     }
 
     private void clearLocked(GLResources.Ctx c, int mask) {
-        if (c.drawFramebuffer == 0 && screenSource != null) {
+        // A depth or stencil clear does not change the picture: it does not need the framebuffer copy made real
+        // (Minecraft clears the screen's depth after the copy, for the stream indicator it no longer draws).
+        if (c.drawFramebuffer == 0 && screenSource != null && (mask & 0x4000) != 0) {
             if (droppingScreenCopy) return;
             materializeScreen();
         }
@@ -1350,19 +1360,66 @@ final class VulkanRenderer {
     private boolean droppingScreenCopy;
 
     /** Called by the main mod before Minecraft copies its framebuffer (texture) to the screen. */
-    boolean screenFromTexture(int texture) {
+    boolean screenFromTexture(int texture, int framebuffer) {
         synchronized (res.lock) {
             res.ensureScreen();
             GLResources.GLTexture tex = res.textures.get(texture);
-            if (tex == null || tex.image == null
-                || tex.image.depth
-                || tex.image.width != res.screenColor.width
-                || tex.image.height != res.screenColor.height
-                || dev.directTarget() != null) return false;
+            if (tex == null || tex.image == null || tex.image.depth || dev.directTarget() != null) return false;
             screenSource = tex.image;
             droppingScreenCopy = true;
+            // From the next frame on, this framebuffer is drawn top-down. (This frame is already drawn; the present
+            // still flips it.) The size may differ from the window's for a moment while it is resized: the present
+            // then scales.
+            int owner = framebufferWithColor(texture);
+            if (owner > 0 && owner != flippedFramebuffer) pendingFlippedFramebuffer = owner;
+            // The image itself turns top-down from the next frame (it may get its picture by a copy rather than by
+            // drawing; copies into a top-down image flip by themselves).
+            if (!tex.image.topDown) pendingTopDownImage = tex.image;
             return true;
         }
+    }
+
+    /**
+     * Minecraft's main framebuffer, which is drawn with its rows top-down (-1: none yet). Nothing samples it as a
+     * texture except the end-of-frame copy that is replaced by the present, and copies of it (blits, captures) know
+     * its row order from {@link VulkanImage#topDown}.
+     */
+    private int flippedFramebuffer = -1, pendingFlippedFramebuffer = -1;
+
+    /** The framebuffer drawing into this texture as its first colour attachment, or -1. */
+    private int framebufferWithColor(int texture) {
+        int found = -1;
+        for (int id = 1; id < framebufferIdLimit; id++) {
+            Framebuffer fb = framebuffers.get(id);
+            if (fb != null && fb.colorTexture[0] == texture) {
+                if (found > 0) return -1; // more than one: leave it alone
+                found = id;
+            }
+        }
+        return found;
+    }
+
+    /** Above every framebuffer id handed out so far (they are small numbers). */
+    int framebufferIdLimit = 1;
+
+    /** Called after a frame was shown: a framebuffer that becomes top-down does so between frames. */
+    private VulkanImage pendingTopDownImage;
+    private int materializeLogs;
+
+    void frameShown() {
+        if (pendingTopDownImage != null) {
+            endRendering();
+            pendingTopDownImage.topDown = true;
+            if (Stats.ON) LOG.info("image {} is now top-down", Long.toHexString(pendingTopDownImage.image));
+            pendingTopDownImage = null;
+            framebufferEdits++;
+        }
+        if (pendingFlippedFramebuffer < 0) return;
+        endRendering();
+        flippedFramebuffer = pendingFlippedFramebuffer;
+        LOG.info("Framebuffer {} is now drawn top-down", flippedFramebuffer);
+        pendingFlippedFramebuffer = -1;
+        framebufferEdits++; // the target's row order changed
     }
 
     /** Called by the main mod after Minecraft's framebuffer copy. */
@@ -1399,6 +1456,7 @@ final class VulkanRenderer {
         if (source == null || droppingScreenCopy) return;
         applyScreenClear(); // its depth part still matters; the colour is covered by the copy below
         screenSource = null;
+        if (Stats.ON && materializeLogs++ < 3) LOG.info("screen copy made real", new Throwable("by"));
         blitImage(
             source,
             0,
@@ -1567,12 +1625,13 @@ final class VulkanRenderer {
         dy0 = clamp(dy0, 0, dh);
         dy1 = clamp(dy1, 0, dh);
         if (sx0 == sx1 || sy0 == sy1 || dx0 == dx1 || dy0 == dy1) return;
-        // The window's image has its rows top-down; OpenGL's coordinates count from the bottom.
-        if (src == dev.directTarget()) {
+        // The window's image (and Minecraft's main framebuffer) have their rows top-down; OpenGL's coordinates
+        // count from the bottom.
+        if (src.topDown || src == dev.directTarget()) {
             sy0 = sh - sy0;
             sy1 = sh - sy1;
         }
-        if (dst == dev.directTarget()) {
+        if (dst.topDown || dst == dev.directTarget()) {
             dy0 = dh - dy0;
             dy1 = dh - dy1;
         }
@@ -1674,7 +1733,7 @@ final class VulkanRenderer {
         boolean benchShot = benching && BENCH_SHOTS.contains(frame - benchStart);
         if (!SHOTS.contains(frame) && !benchShot || res.screenColor == null) return;
         VulkanImage img = screenSource != null ? screenSource : screenImage();
-        shotTopDown = img == dev.directTarget();
+        shotTopDown = img.topDown || img == dev.directTarget();
         shotBgra = img.format == VK_FORMAT_B8G8R8A8_UNORM;
         endRendering();
         shotWidth = img.width;

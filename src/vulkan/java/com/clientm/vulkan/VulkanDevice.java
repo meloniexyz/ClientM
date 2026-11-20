@@ -91,6 +91,7 @@ final class VulkanDevice {
     private long[] swapViews = new long[0];
     private VulkanImage[] swapTargets = new VulkanImage[0];
     private int swapFormat;
+    private boolean copyLogged;
     /** The frame whose swapchain image was acquired early, and that image (-1: acquiring failed). */
     private long acquiredFrame = -1;
     private int acquiredIndex = -1;
@@ -384,13 +385,17 @@ final class VulkanDevice {
                 .format();
             int colorSpace = formats.get(0)
                 .colorSpace();
+            // RGBA first: the same layout as the game's images, so showing a frame is a plain copy. BGRA otherwise.
+            int best = -1;
             for (int i = 0; i < count.get(0); i++) {
-                if (formats.get(i)
-                    .format() == VK_FORMAT_B8G8R8A8_UNORM) {
-                    chosen = VK_FORMAT_B8G8R8A8_UNORM;
+                int f = formats.get(i)
+                    .format();
+                int rank = f == VK_FORMAT_R8G8B8A8_UNORM ? 2 : f == VK_FORMAT_B8G8R8A8_UNORM ? 1 : 0;
+                if (rank > best) {
+                    best = rank;
+                    chosen = f;
                     colorSpace = formats.get(i)
                         .colorSpace();
-                    break;
                 }
             }
             presentMode = choosePresentMode(stack);
@@ -761,31 +766,70 @@ final class VulkanDevice {
                         VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED,
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-                    VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
-                    blit.get(0)
-                        .srcSubresource(
-                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                .layerCount(1))
-                        .dstSubresource(
-                            s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                .layerCount(1));
-                    blit.get(0)
-                        .srcOffsets(0)
-                        .set(0, screen.height, 0);
-                    blit.get(0)
-                        .srcOffsets(1)
-                        .set(screen.width, 0, 1);
-                    blit.get(0)
-                        .dstOffsets(1)
-                        .set(swapWidth, swapHeight, 1);
-                    vkCmdBlitImage(
-                        cmd,
-                        screen.image,
-                        VK_IMAGE_LAYOUT_GENERAL,
-                        swapImages[index],
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        blit,
-                        VK_FILTER_NEAREST);
+                    if (Stats.ON && !copyLogged && frameNumber % 3000 == 0) LOG.info(
+                        "present: topDown {} format {} swap format {} size {}x{} swap {}x{}",
+                        screen.topDown,
+                        screen.format,
+                        swapFormat,
+                        screen.width,
+                        screen.height,
+                        swapWidth,
+                        swapHeight);
+                    if (screen.topDown && screen.format == swapFormat
+                        && screen.width == swapWidth
+                        && screen.height == swapHeight) {
+                        // Same layout, same size, same row order: a plain copy.
+                        org.lwjgl.vulkan.VkImageCopy.Buffer copy = org.lwjgl.vulkan.VkImageCopy.calloc(1, stack);
+                        copy.get(0)
+                            .srcSubresource(
+                                s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                    .layerCount(1))
+                            .dstSubresource(
+                                s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                    .layerCount(1));
+                        copy.get(0)
+                            .extent()
+                            .set(swapWidth, swapHeight, 1);
+                        vkCmdCopyImage(
+                            cmd,
+                            screen.image,
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            swapImages[index],
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            copy);
+                        if (Stats.ON) Stats.fCopies++;
+                        if (!copyLogged) {
+                            copyLogged = true;
+                            LOG.info("Frames are shown by a plain copy ({}x{})", swapWidth, swapHeight);
+                        }
+                    } else {
+                        VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
+                        blit.get(0)
+                            .srcSubresource(
+                                s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                    .layerCount(1))
+                            .dstSubresource(
+                                s -> s.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                    .layerCount(1));
+                        // OpenGL keeps row 0 at the bottom; the window wants it at the top (unless already top-down).
+                        blit.get(0)
+                            .srcOffsets(0)
+                            .set(0, screen.topDown ? 0 : screen.height, 0);
+                        blit.get(0)
+                            .srcOffsets(1)
+                            .set(screen.width, screen.topDown ? screen.height : 0, 1);
+                        blit.get(0)
+                            .dstOffsets(1)
+                            .set(swapWidth, swapHeight, 1);
+                        vkCmdBlitImage(
+                            cmd,
+                            screen.image,
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            swapImages[index],
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            blit,
+                            VK_FILTER_NEAREST);
+                    }
                     Barriers.image(
                         cmd,
                         swapImages[index],

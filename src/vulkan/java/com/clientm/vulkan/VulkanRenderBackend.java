@@ -421,8 +421,8 @@ public final class VulkanRenderBackend extends RenderBackend {
     }
 
     /** See VulkanRenderer.screenFromTexture. */
-    boolean screenFromTexture(int texture) {
-        return rnd().screenFromTexture(texture);
+    boolean screenFromTexture(int texture, int framebuffer) {
+        return rnd().screenFromTexture(texture, framebuffer);
     }
 
     void screenCopyDone() {
@@ -439,6 +439,7 @@ public final class VulkanRenderBackend extends RenderBackend {
             v.captureBeforePresent();
             r.dev.endFrame(v.takeShownScreen());
             v.captureAfterPresent();
+            v.frameShown();
             if (Stats.ON) Stats.frame();
         }
     }
@@ -1864,6 +1865,7 @@ public final class VulkanRenderBackend extends RenderBackend {
     public int genFramebuffers() {
         int id = nextId();
         rnd().framebuffers.put(id, new VulkanRenderer.Framebuffer());
+        rnd().framebufferIdLimit = Math.max(rnd().framebufferIdLimit, id + 1);
         return id;
     }
 

@@ -26,6 +26,12 @@ final class VulkanImage {
     /** Bumped whenever an image is created or released: a render target may have changed. */
     static int generation;
 
+    /**
+     * Rows run top-down instead of OpenGL's bottom-up: Minecraft's main framebuffer is drawn this way (see
+     * VulkanRenderer.flippedFramebuffer) so it can be copied to the window without flipping.
+     */
+    volatile boolean topDown;
+
     /** An upload into this image is queued and not recorded yet (see GLResources.flushUploads). */
     boolean pendingUpload;
     long image, memory, view;

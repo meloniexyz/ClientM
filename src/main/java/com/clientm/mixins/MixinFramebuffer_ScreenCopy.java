@@ -24,6 +24,8 @@ public abstract class MixinFramebuffer_ScreenCopy {
     @Shadow
     public int framebufferTexture;
     @Shadow
+    public int framebufferObject;
+    @Shadow
     public int framebufferWidth, framebufferHeight, framebufferTextureWidth, framebufferTextureHeight;
 
     private static MethodHandle clientm$take, clientm$done;
@@ -37,7 +39,7 @@ public abstract class MixinFramebuffer_ScreenCopy {
             Class<?> gate = Class.forName("com.clientm.vulkan.VulkanGate");
             MethodHandles.Lookup lookup = MethodHandles.publicLookup();
             clientm$take = lookup
-                .findStatic(gate, "screenFromTexture", MethodType.methodType(boolean.class, int.class));
+                .findStatic(gate, "screenFromTexture", MethodType.methodType(boolean.class, int.class, int.class));
             clientm$done = lookup.findStatic(gate, "screenCopyDone", MethodType.methodType(void.class));
         } catch (Throwable t) {
             // Not an LWJGL 3 launch: the copy is drawn as usual.
@@ -49,14 +51,13 @@ public abstract class MixinFramebuffer_ScreenCopy {
     private void clientm$screenFromFramebuffer(int width, int height, CallbackInfo ci) {
         clientm$taken = false;
         Minecraft mc = Minecraft.getMinecraft();
-        if ((Object) this != mc.getFramebuffer() || width != framebufferWidth
-            || height != framebufferHeight
-            || framebufferWidth != framebufferTextureWidth
+        // The whole texture must be the picture (it always is when the graphics card takes any texture size).
+        if ((Object) this != mc.getFramebuffer() || framebufferWidth != framebufferTextureWidth
             || framebufferHeight != framebufferTextureHeight) return;
         clientm$lookUp();
         if (clientm$take == null) return;
         try {
-            clientm$taken = (boolean) clientm$take.invokeExact(framebufferTexture);
+            clientm$taken = (boolean) clientm$take.invokeExact(framebufferTexture, framebufferObject);
         } catch (Throwable t) {
             clientm$take = null;
         }

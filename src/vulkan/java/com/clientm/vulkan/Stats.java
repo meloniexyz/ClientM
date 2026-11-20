@@ -13,7 +13,7 @@ final class Stats {
     static long fPipelines, fImages, fBuffers, fStaged, fUploads, fFlushes, fFenceNs, fAcquireNs, fPresentNs, fSubmitNs;
     private static long lastFrameNs, spikes;
     /** Time spent in this frame creating pipelines and images. */
-    static long fPipelineNs, fImageNs, fUploadFlushes;
+    static long fPipelineNs, fImageNs, fUploadFlushes, fCopies;
     static String fWhat = "";
 
     private Stats() {}
