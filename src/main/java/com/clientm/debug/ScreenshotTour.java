@@ -71,7 +71,11 @@ public final class ScreenshotTour {
                     accountsTour();
                     return;
                 }
-                if (menuTicks == 0) toTestDisplay();
+                if (menuTicks == 0) {
+                    toTestDisplay();
+                    // Benchmark with VSync on: switched on at the menu, so the swapchain change is not measured.
+                    if ("1".equals(System.getenv("CLIENTM_TEST_VSYNC"))) mc.gameSettings.enableVsync = true;
+                }
                 // Give the title screen a moment to draw, photograph it, then load the world.
                 if (++menuTicks == 30) shot("00-main-menu");
                 if (menuTicks > 34) launchFirstWorld();
@@ -568,6 +572,39 @@ public final class ScreenshotTour {
         }
     }
 
+    /** Logs how Angelica's GL state manager sees the game thread (which context lookup path it takes). */
+    static void glsmDiag() {
+        try {
+            Class<?> c = Class.forName("com.gtnewhorizons.angelica.glsm.GLStateManager");
+            StringBuilder b = new StringBuilder(
+                "GLSM diag: current=" + Thread.currentThread()
+                    .getName());
+            for (String f : new String[] { "MainThread", "workerContextsActive", "workerContextCount", "splashComplete",
+                "drawableGLHolder", "mainCtx", "primaryContext" }) {
+                java.lang.reflect.Field fl = c.getDeclaredField(f);
+                fl.setAccessible(true);
+                Object v = fl.get(null);
+                b.append(", ")
+                    .append(f)
+                    .append('=')
+                    .append(
+                        v instanceof Thread ? ((Thread) v).getName() + (v == Thread.currentThread() ? "(this)" : "")
+                            : String.valueOf(v));
+            }
+            java.lang.reflect.Field tl = c.getDeclaredField("tlWorkerContext");
+            tl.setAccessible(true);
+            Object mine = ((ThreadLocal<?>) tl.get(null)).get();
+            java.lang.reflect.Field pf = c.getDeclaredField("primaryContext");
+            pf.setAccessible(true);
+            b.append(", thisThreadWorkerCtx=")
+                .append(mine)
+                .append(mine == pf.get(null) ? "(primary)" : "");
+            ClientM.LOG.info(b.toString());
+        } catch (Throwable t) {
+            ClientM.LOG.warn("GLSM diag failed", t);
+        }
+    }
+
     /** Removes every zombie pigman (the test mob) from the loaded world. */
     static int clearTestMobs(net.minecraft.world.World world) {
         int removed = 0;
@@ -911,6 +948,7 @@ public final class ScreenshotTour {
             mc.gameSettings.particleSetting = 0; // All
             spawnFighters();
             spawnMobs();
+            glsmDiag();
             benching = true;
             System.setProperty("clientm.benching", "1");
             return;
@@ -934,6 +972,7 @@ public final class ScreenshotTour {
                     lazy.onSettingsChanged();
                 }
             }
+            glsmDiag();
             benching = true;
             System.setProperty("clientm.benching", "1");
             return;

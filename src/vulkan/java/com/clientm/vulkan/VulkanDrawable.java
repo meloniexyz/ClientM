@@ -39,7 +39,12 @@ final class VulkanDrawable extends DrawableGL {
     public void checkGLError() {}
 
     @Override
-    public void setSwapInterval(int interval) {}
+    public void setSwapInterval(int interval) {
+        // Display.setVSyncEnabled (the game's VSync option) ends up here.
+        BackendManager.RENDER_BACKEND.setVSyncMode(
+            interval == 0 ? com.gtnewhorizons.angelica.glsm.backend.VSyncMode.OFF
+                : com.gtnewhorizons.angelica.glsm.backend.VSyncMode.ON);
+    }
 
     @Override
     public void swapBuffers() {

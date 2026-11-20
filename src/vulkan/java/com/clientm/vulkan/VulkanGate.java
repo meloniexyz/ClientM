@@ -157,6 +157,20 @@ public final class VulkanGate {
     }
 
     /** True once the window belongs to Vulkan; the backend reports itself available only then. */
+    /**
+     * The game's VSync option (sent by ClientM's main mod: with no OpenGL context, Display.setVSyncEnabled does
+     * nothing).
+     */
+    public static void vsyncOn() {
+        if (isEngaged()) com.gtnewhorizons.angelica.glsm.backend.BackendManager.RENDER_BACKEND
+            .setVSyncMode(com.gtnewhorizons.angelica.glsm.backend.VSyncMode.ON);
+    }
+
+    public static void vsyncOff() {
+        if (isEngaged()) com.gtnewhorizons.angelica.glsm.backend.BackendManager.RENDER_BACKEND
+            .setVSyncMode(com.gtnewhorizons.angelica.glsm.backend.VSyncMode.OFF);
+    }
+
     public static boolean isEngaged() {
         return engaged;
     }

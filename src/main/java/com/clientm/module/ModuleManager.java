@@ -159,6 +159,8 @@ public class ModuleManager {
     }
 
     private int shaderCheck;
+    /** The VSync option as last sent to the Vulkan renderer (null: not yet). */
+    private Boolean appliedVsync;
     private boolean shaderWarned;
 
     /** Calls a no-argument static method of the Vulkan renderer's gate (null on OpenGL-only launches). */
@@ -226,6 +228,11 @@ public class ModuleManager {
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         com.clientm.module.impl.HitFixModule.tickEnd();
+        boolean vsync = Minecraft.getMinecraft().gameSettings.enableVsync;
+        if (appliedVsync == null || appliedVsync != vsync) {
+            appliedVsync = vsync;
+            vulkanGate(vsync ? "vsyncOn" : "vsyncOff");
+        }
         if (firstRun) {
             // No config yet: this is the first launch, so start from the best-performance settings.
             firstRun = false;

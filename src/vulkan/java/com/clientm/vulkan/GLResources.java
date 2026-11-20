@@ -102,8 +102,23 @@ final class GLResources {
 
     private final ThreadLocal<Ctx> context = ThreadLocal.withInitial(Ctx::new);
 
+    /** The game thread gets its context from plain fields, not a ThreadLocal lookup. */
+    private Thread ctxOwner;
+    private Ctx ownerCtx;
+
     Ctx ctx() {
-        return context.get();
+        if (Thread.currentThread() == ctxOwner) return ownerCtx;
+        Ctx c = context.get();
+        if (ctxOwner == null
+            && Thread.currentThread() == com.gtnewhorizons.angelica.glsm.GLStateManager.getMainThread()) {
+            synchronized (this) {
+                if (ctxOwner == null) {
+                    ownerCtx = c;
+                    ctxOwner = Thread.currentThread();
+                }
+            }
+        }
+        return c;
     }
 
     // ------------------------------------------------------------------ the game's screen image

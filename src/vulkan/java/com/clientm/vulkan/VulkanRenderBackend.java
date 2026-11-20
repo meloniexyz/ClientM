@@ -127,7 +127,11 @@ public final class VulkanRenderBackend extends RenderBackend {
 
     @Override
     protected VSyncMode applyVSyncMode(VSyncMode preferred) {
-        return preferred;
+        int wanted = preferred == VSyncMode.ON ? VulkanDevice.VSYNC_ON
+            : preferred == VSyncMode.MAILBOX ? VulkanDevice.VSYNC_MAILBOX : VulkanDevice.VSYNC_OFF;
+        int used = VulkanDevice.setVSync(wanted);
+        return used == VulkanDevice.VSYNC_ON ? VSyncMode.ON
+            : used == VulkanDevice.VSYNC_MAILBOX ? VSyncMode.MAILBOX : VSyncMode.OFF;
     }
 
     // ------------------------------------------------------------------ frames

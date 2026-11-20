@@ -485,17 +485,53 @@ final class VulkanDevice {
         }
     }
 
+    /** The in-game VSync setting: {@link #VSYNC_OFF}, {@link #VSYNC_ON} or {@link #VSYNC_MAILBOX}. */
+    /** With VSync: start a frame only once the previous one finished (CLIENTM_VK_VSYNC_QUEUE=1 lets frames queue). */
+    private static final boolean LOW_LATENCY_VSYNC = !"1".equals(System.getenv("CLIENTM_VK_VSYNC_QUEUE"));
+
+    static final int VSYNC_OFF = 0, VSYNC_ON = 1, VSYNC_MAILBOX = 2;
+
+    private static volatile int vsync = VSYNC_OFF;
+    private static volatile VulkanDevice current;
+    private volatile boolean immediateSupported = true, mailboxSupported = true;
+
+    /** Applies the VSync setting (the swapchain is rebuilt on the next frame); returns the mode that will be used. */
+    static int setVSync(int wanted) {
+        vsync = wanted;
+        VulkanDevice d = current;
+        if (d != null) d.needsRebuild = true;
+        return effectiveVSync(d, wanted);
+    }
+
+    private static int effectiveVSync(VulkanDevice d, int wanted) {
+        if (d == null) return wanted;
+        if (wanted == VSYNC_OFF)
+            return d.immediateSupported ? VSYNC_OFF : d.mailboxSupported ? VSYNC_MAILBOX : VSYNC_ON;
+        if (wanted == VSYNC_MAILBOX) return d.mailboxSupported ? VSYNC_MAILBOX : VSYNC_ON;
+        return VSYNC_ON;
+    }
+
     private int choosePresentMode(MemoryStack stack) {
         IntBuffer count = stack.mallocInt(1);
         vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, surface, count, null);
         IntBuffer modes = stack.mallocInt(count.get(0));
         vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, surface, count, modes);
-        boolean mailbox = false;
+        boolean mailbox = false, immediate = false;
         for (int i = 0; i < count.get(0); i++) {
-            if (modes.get(i) == VK_PRESENT_MODE_IMMEDIATE_KHR) return VK_PRESENT_MODE_IMMEDIATE_KHR;
+            if (modes.get(i) == VK_PRESENT_MODE_IMMEDIATE_KHR) immediate = true;
             if (modes.get(i) == VK_PRESENT_MODE_MAILBOX_KHR) mailbox = true;
         }
-        return mailbox ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
+        immediateSupported = immediate;
+        mailboxSupported = mailbox;
+        current = this;
+        switch (effectiveVSync(this, vsync)) {
+            case VSYNC_OFF:
+                return VK_PRESENT_MODE_IMMEDIATE_KHR;
+            case VSYNC_MAILBOX:
+                return VK_PRESENT_MODE_MAILBOX_KHR;
+            default:
+                return VK_PRESENT_MODE_FIFO_KHR; // always supported
+        }
     }
 
     /** The window's size in pixels, which the game's screen image follows. */
@@ -700,6 +736,13 @@ final class VulkanDevice {
     }
 
     private void beginFrame() {
+        if (presentMode == VK_PRESENT_MODE_FIFO_KHR && LOW_LATENCY_VSYNC && frameNumber > 0) {
+            // With VSync the graphics card waits for the screen, so queued frames would only add input lag: start a
+            // frame (and read the mouse for it) only once the one before it has finished.
+            int prev = (int) ((frameNumber - 1) % FRAMES_IN_FLIGHT);
+            if (slotFrame[prev] > submittedFrame) drainSubmits();
+            vkWaitForFences(device, frameDone[prev], true, Long.MAX_VALUE);
+        }
         slot = (int) (frameNumber % FRAMES_IN_FLIGHT);
         if (slotFrame[slot] > submittedFrame) drainSubmits();
         long t0 = Stats.ON ? System.nanoTime() : 0;
