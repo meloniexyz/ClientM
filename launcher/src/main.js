@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, safeStorage, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, safeStorage, nativeImage, session } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const auth = require('./auth');
@@ -187,8 +187,14 @@ ipcMain.handle('login', async () => {
   if (!azureClientId) throw new Error('Add the Azure client ID in Settings first.');
   loginCancelled = false;
   const code = await auth.startDeviceCode(azureClientId);
+  loginCode = code.user_code;
   send('login-code', { code: code.user_code, url: code.verification_uri });
-  const ms = await auth.waitForDeviceCode(azureClientId, code, () => loginCancelled);
+  let ms;
+  try {
+    ms = await auth.waitForDeviceCode(azureClientId, code, () => loginCancelled);
+  } finally {
+    closeSignInWindow(); // signed in, cancelled or failed: the Microsoft page is done either way
+  }
   const session = await auth.minecraftSession(ms.access_token);
   saveAccount({ name: session.name, uuid: session.uuid, refreshToken: ms.refresh_token }, true);
   await saveFace(session.uuid, session.skinUrl);
@@ -197,6 +203,7 @@ ipcMain.handle('login', async () => {
 
 ipcMain.handle('login-cancel', () => {
   loginCancelled = true;
+  closeSignInWindow();
 });
 
 ipcMain.handle('switch-account', (e, uuid) => {
@@ -289,10 +296,61 @@ ipcMain.handle('open-folder', () => {
   return shell.openPath(path.join(root, 'game'));
 });
 
-// Only Microsoft's own sign-in pages may be opened from the window.
+// ---------------------------------------------------------------- the Microsoft sign-in window
+
+// Microsoft's sign-in page opens in a window of the launcher with a new, empty session each time, so it never
+// continues with an account a browser is already signed in to (which made adding a second account impossible). It
+// can only show Microsoft's own pages, has no access to the launcher, and closes by itself once the sign-in is done.
+let signInWin = null;
+let loginCode = '';
+const MICROSOFT_HOST = /(^|\.)(microsoft\.com|microsoftonline\.com|live\.com|live\.net|xboxlive\.com|msauth\.net|msftauth\.net)$/;
+
+function microsoftUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && MICROSOFT_HOST.test(u.hostname);
+  } catch (e) {
+    return false;
+  }
+}
+
+function openSignInWindow(url) {
+  closeSignInWindow();
+  const signInSession = session.fromPartition('clientm-signin-' + Date.now()); // not "persist:": kept in memory only
+  const title = 'Sign in with Microsoft - code ' + loginCode;
+  signInWin = new BrowserWindow({
+    width: 500,
+    height: 700,
+    parent: win,
+    title,
+    autoHideMenuBar: true,
+    backgroundColor: '#ffffff',
+    webPreferences: { session: signInSession, contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  signInWin.on('page-title-updated', (e) => e.preventDefault()); // keep the code in the title
+  signInWin.webContents.setWindowOpenHandler(({ url: next }) => {
+    if (microsoftUrl(next) && signInWin) signInWin.loadURL(next);
+    return { action: 'deny' };
+  });
+  signInWin.webContents.on('will-navigate', (e, next) => {
+    if (!microsoftUrl(next)) e.preventDefault();
+  });
+  signInWin.on('closed', () => {
+    signInWin = null;
+    signInSession.clearStorageData().catch(() => {});
+  });
+  signInWin.loadURL(url);
+}
+
+function closeSignInWindow() {
+  // destroy, not close: Microsoft's page can hold a normal close open with a "leave page?" handler
+  if (signInWin && !signInWin.isDestroyed()) signInWin.destroy();
+  signInWin = null;
+}
+
+// "Open Microsoft page" in the sign-in dialog: only Microsoft's own sign-in pages.
 ipcMain.handle('open-url', (e, url) => {
-  const host = new URL(url).hostname;
-  if (/(^|\.)microsoft\.com$|(^|\.)microsoftonline\.com$|(^|\.)live\.com$/.test(host)) return shell.openExternal(url);
+  if (microsoftUrl(url)) openSignInWindow(url);
 });
 
 // ---------------------------------------------------------------- updates
