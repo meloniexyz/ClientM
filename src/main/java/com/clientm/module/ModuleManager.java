@@ -104,6 +104,10 @@ public class ModuleManager {
         register(new BorderlessFullscreenModule());
         register(new com.clientm.module.impl.HitFixModule());
         register(new com.clientm.module.impl.CustomSkiesModule());
+        register(new com.clientm.module.impl.ServerInfoModule());
+        register(new com.clientm.module.impl.HitMarkerModule());
+        register(new com.clientm.module.impl.ZoomModule());
+        register(new com.clientm.module.impl.CrosshairModule());
         load();
         ClientRegistry.registerKeyBinding(menuKey);
         FMLCommonHandler.instance()
@@ -138,6 +142,11 @@ public class ModuleManager {
 
     @SubscribeEvent
     public void onMouse(MouseEvent event) {
+        // While zoomed, the mouse wheel changes the zoom instead of the hotbar slot.
+        if (event.dwheel != 0 && com.clientm.module.impl.ZoomModule.wheel(event.dwheel)) {
+            event.setCanceled(true);
+            return;
+        }
         if (event.button < 0) return;
         for (Module m : all) if (m.enabled) m.onMouse(event.button, event.buttonstate);
     }
@@ -236,6 +245,22 @@ public class ModuleManager {
         for (Module m : all) if (m.enabled || editing) m.onTick();
         BorderlessFullscreenModule.sync();
         com.clientm.module.impl.CustomSkiesModule.sync();
+    }
+
+    /** The crosshair is drawn every frame (outside the HUD cache): the custom crosshair and the hit marker go here. */
+    @SubscribeEvent
+    public void onCrosshairPre(RenderGameOverlayEvent.Pre event) {
+        if (event.type != RenderGameOverlayEvent.ElementType.CROSSHAIRS) return;
+        if (!com.clientm.module.impl.CrosshairModule.active()) return;
+        event.setCanceled(true);
+        com.clientm.module.impl.CrosshairModule.draw(event.resolution);
+        com.clientm.module.impl.HitMarkerModule.draw(event.resolution);
+    }
+
+    @SubscribeEvent
+    public void onCrosshairPost(RenderGameOverlayEvent.Post event) {
+        if (event.type != RenderGameOverlayEvent.ElementType.CROSSHAIRS) return;
+        com.clientm.module.impl.HitMarkerModule.draw(event.resolution);
     }
 
     @SubscribeEvent

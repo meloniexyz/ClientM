@@ -178,6 +178,102 @@ public final class ScreenshotTour {
     private final int[] frameNanos = new int[400000];
     private int frames;
 
+    // ---- CLIENTM_TOUR=features: hit marker (attacking real mobs), zoom, Ping & TPS and the custom crosshair.
+    private long featureStart, lastAttack, featureQuitAt;
+    private double homeX, homeY, homeZ;
+    private float homeYaw, homePitch;
+    private int attacks, featureStep;
+    private boolean markerShot;
+    private float zoomRatio;
+
+    @SubscribeEvent
+    public void onFeatureTest(TickEvent.RenderTickEvent event) {
+        if ((featureStart == 0 && featureQuitAt == 0) || event.phase != TickEvent.Phase.END || mc.thePlayer == null)
+            return;
+        mc.inGameHasFocus = true;
+        if (mc.currentScreen != null) mc.displayGuiScreen(null);
+        double secs = (System.nanoTime() - featureStart) / 1e9;
+        if (secs > 3 && secs < 9 && System.nanoTime() - lastAttack > 600_000_000L) {
+            net.minecraft.entity.Entity target = null;
+            double best = 32 * 32;
+            for (Object o : mc.theWorld.loadedEntityList) {
+                if (!(o instanceof net.minecraft.entity.EntityLiving)) continue;
+                net.minecraft.entity.Entity e = (net.minecraft.entity.Entity) o;
+                double d = e.getDistanceSqToEntity(mc.thePlayer);
+                if (d < best) {
+                    best = d;
+                    target = e;
+                }
+            }
+            if (target != null) {
+                // Step up to it (they wander) and face it, as a player would.
+                double dx = mc.thePlayer.posX - target.posX, dz = mc.thePlayer.posZ - target.posZ;
+                double len = Math.max(0.01, Math.sqrt(dx * dx + dz * dz));
+                mc.thePlayer.setPosition(
+                    target.posX + dx / len * 2,
+                    target.posY + mc.thePlayer.yOffset,
+                    target.posZ + dz / len * 2);
+                mc.thePlayer.rotationYaw = (float) Math.toDegrees(Math.atan2(-dx, dz)) + 180f;
+                mc.thePlayer.rotationPitch = 10f;
+                mc.thePlayer.swingItem();
+                mc.playerController.attackEntity(mc.thePlayer, target);
+                attacks++;
+            }
+            lastAttack = System.nanoTime();
+        }
+        if (!markerShot && com.clientm.module.impl.HitMarkerModule.shown > 0) {
+            markerShot = true;
+            shot("features-hitmarker");
+        }
+        int zoomKey = com.clientm.module.impl.ZoomModule.keyCode();
+        if (secs > 9.5 && featureStep == 0) {
+            featureStep = 1;
+            net.minecraft.client.settings.KeyBinding.setKeyBindState(zoomKey, true);
+        }
+        if (secs > 10.5 && featureStep == 1) {
+            featureStep = 2;
+            zoomRatio = com.clientm.module.impl.ZoomModule.fov(70f) / 70f;
+            shot("features-zoom");
+        }
+        if (secs > 11 && featureStep == 2) {
+            featureStep = 3;
+            net.minecraft.client.settings.KeyBinding.setKeyBindState(zoomKey, false);
+        }
+        if (secs > 12 && featureStep == 3) {
+            featureStep = 4;
+            float after = com.clientm.module.impl.ZoomModule.fov(70f) / 70f;
+            String report = String.format(
+                "attacks %d, hit markers shown %d%nzoom: fov x%.3f while held, x%.3f after release%nping & tps shows: %s%n",
+                attacks,
+                com.clientm.module.impl.HitMarkerModule.shown,
+                zoomRatio,
+                after,
+                com.clientm.module.impl.ServerInfoModule.shownText());
+            ClientM.LOG.info("Feature test:\n{}", report);
+            try {
+                java.nio.file.Files.write(
+                    new java.io.File(mc.mcDataDir, "clientm-features.txt").toPath(),
+                    report.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (java.io.IOException e) {
+                ClientM.LOG.error("Could not write the feature test result", e);
+            }
+            featureStart = 0;
+            if (mc.getIntegratedServer() != null) {
+                MobSpawner cleaner = new MobSpawner(0, 0, 0, 0);
+                cleaner.clearFirst = true;
+                cpw.mods.fml.common.FMLCommonHandler.instance()
+                    .bus()
+                    .register(cleaner);
+            }
+            mc.thePlayer.setPositionAndRotation(homeX, homeY, homeZ, homeYaw, homePitch);
+            featureQuitAt = System.nanoTime() + 1_000_000_000L;
+        }
+        if (featureQuitAt != 0 && System.nanoTime() > featureQuitAt) {
+            featureQuitAt = 0;
+            mc.shutdown();
+        }
+    }
+
     // ---- CLIENTM_TOUR=clicks: clicks fed into the game's mouse queue (the real mouse is not touched), measuring the
     // time from each click to its swing, with Hit Fix's instant clicks on and then off.
     private boolean clicking;
@@ -430,9 +526,11 @@ public final class ScreenshotTour {
             return;
         }
         if (mc.getIntegratedServer() == null || count <= 0) return;
+        MobSpawner spawner = new MobSpawner(count, mc.thePlayer.posX, mc.thePlayer.posY, mc.thePlayer.posZ);
+        spawner.clearFirst = true; // the world is saved: earlier runs' mobs must not pile up
         cpw.mods.fml.common.FMLCommonHandler.instance()
             .bus()
-            .register(new MobSpawner(count, mc.thePlayer.posX, mc.thePlayer.posY, mc.thePlayer.posZ));
+            .register(spawner);
     }
 
     /** Runs once on the server thread, where spawning is safe. */
@@ -449,11 +547,15 @@ public final class ScreenshotTour {
             this.z = z;
         }
 
+        /** Removes earlier test mobs first, so repeated tests do not pile them up in the saved world. */
+        boolean clearFirst;
+
         @cpw.mods.fml.common.eventhandler.SubscribeEvent
         public void onServerTick(cpw.mods.fml.common.gameevent.TickEvent.ServerTickEvent event) {
             if (done) return;
             done = true;
             net.minecraft.world.World world = net.minecraft.server.MinecraftServer.getServer().worldServers[0];
+            if (clearFirst) clearTestMobs(world);
             for (int i = 0; i < count; i++) {
                 double angle = i * 2.399963; // golden angle: an even spiral
                 double radius = 3 + Math.sqrt(i) * 1.5;
@@ -464,6 +566,19 @@ public final class ScreenshotTour {
                 world.spawnEntityInWorld(mob);
             }
         }
+    }
+
+    /** Removes every zombie pigman (the test mob) from the loaded world. */
+    static int clearTestMobs(net.minecraft.world.World world) {
+        int removed = 0;
+        for (Object o : new java.util.ArrayList<Object>(world.loadedEntityList)) {
+            if (o instanceof net.minecraft.entity.monster.EntityPigZombie) {
+                ((net.minecraft.entity.Entity) o).setDead();
+                removed++;
+            }
+        }
+        ClientM.LOG.info("Removed {} test mobs", removed);
+        return removed;
     }
 
     /** Benchmarks must not depend on the weather the world happens to have: rain alone costs hundreds of FPS. */
@@ -758,6 +873,27 @@ public final class ScreenshotTour {
         }
         if ("world".equals(System.getenv("CLIENTM_TOUR"))) {
             worldTest();
+            return;
+        }
+        if ("features".equals(System.getenv("CLIENTM_TOUR"))) {
+            if (step++ > 0) return; // set up once; onFeatureTest drives the rest
+            noonAndClear();
+            mc.gameSettings.pauseOnLostFocus = false;
+            for (String id : new String[] { "crosshair", "serverinfo", "hitmarker", "zoom" })
+                module(id).setEnabled(true);
+            MobSpawner spawner = new MobSpawner(4, mc.thePlayer.posX, mc.thePlayer.posY, mc.thePlayer.posZ);
+            spawner.clearFirst = true;
+            cpw.mods.fml.common.FMLCommonHandler.instance()
+                .bus()
+                .register(spawner);
+            featureStart = System.nanoTime();
+            // The test walks up to the mobs; the saved world keeps where the player stands, and the fight
+            // benchmark depends on it - so it goes back here at the end.
+            homeX = mc.thePlayer.posX;
+            homeY = mc.thePlayer.posY;
+            homeZ = mc.thePlayer.posZ;
+            homeYaw = mc.thePlayer.rotationYaw;
+            homePitch = mc.thePlayer.rotationPitch;
             return;
         }
         if ("clicks".equals(System.getenv("CLIENTM_TOUR"))) {

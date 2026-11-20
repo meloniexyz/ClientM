@@ -69,7 +69,20 @@ import me.eigenraven.lwjgl3ify.api.Lwjgl3Aware;
 final class VulkanDevice {
 
     private static final Logger LOG = LogManager.getLogger("ClientM/Vulkan");
-    static final int FRAMES_IN_FLIGHT = 2;
+    static final int FRAMES_IN_FLIGHT = framesInFlight();
+
+    /**
+     * Frames the CPU may record ahead of the graphics card (3: measured ~2% more fps and better 1% lows than 2 in
+     * fights; CLIENTM_VK_FRAMES=1..4 for testing).
+     */
+    private static int framesInFlight() {
+        try {
+            String v = System.getenv("CLIENTM_VK_FRAMES");
+            return v == null ? 3 : Math.max(1, Math.min(4, Integer.parseInt(v.trim())));
+        } catch (NumberFormatException e) {
+            return 3;
+        }
+    }
 
     private final long window;
     private VkInstance instance;
@@ -91,6 +104,11 @@ final class VulkanDevice {
     private long[] swapViews = new long[0];
     private VulkanImage[] swapTargets = new VulkanImage[0];
     private int swapFormat;
+    /**
+     * How long to wait for the window to hand out an image. Windows can stop handing them out (display switched
+     * off, window hidden); the game then skips showing frames instead of freezing.
+     */
+    private static final long ACQUIRE_TIMEOUT_NS = 100_000_000L;
     private boolean copyLogged;
     /** The frame whose swapchain image was acquired early, and that image (-1: acquiring failed). */
     private long acquiredFrame = -1;
@@ -609,13 +627,13 @@ final class VulkanDevice {
             int acquired = vkAcquireNextImageKHR(
                 device,
                 swapchain,
-                Long.MAX_VALUE,
+                ACQUIRE_TIMEOUT_NS,
                 imageReady[slot],
                 VK_NULL_HANDLE,
                 pIndex);
             if (Stats.ON) Stats.fAcquireNs += System.nanoTime() - t0;
             if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
-                needsRebuild = true;
+                if (acquired != VK_TIMEOUT && acquired != VK_NOT_READY) needsRebuild = true;
                 return null;
             }
             acquiredIndex = pIndex.get(0);
@@ -740,13 +758,14 @@ final class VulkanDevice {
                     int acquired = vkAcquireNextImageKHR(
                         device,
                         swapchain,
-                        Long.MAX_VALUE,
+                        ACQUIRE_TIMEOUT_NS,
                         imageReady[f],
                         VK_NULL_HANDLE,
                         pIndex);
                     if (Stats.ON) Stats.fAcquireNs += System.nanoTime() - ta;
                     if (acquired == VK_SUCCESS || acquired == VK_SUBOPTIMAL_KHR) index = pIndex.get(0);
-                    else needsRebuild = true;
+                    // No image within the time limit (display off, window hidden): this frame is not shown.
+                    else if (acquired != VK_TIMEOUT && acquired != VK_NOT_READY) needsRebuild = true;
                 }
                 stamp("present blit");
                 if (direct) {
