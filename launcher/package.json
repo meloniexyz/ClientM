@@ -1,7 +1,7 @@
 {
   "name": "clientm-launcher",
   "productName": "ClientM",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Launcher for the ClientM Minecraft 1.7.10 client",
   "author": "meloniexyz",
   "main": "src/main.js",
