@@ -149,6 +149,36 @@ public class ModuleManager {
         com.clientm.module.impl.HitFixModule.frame();
     }
 
+    private int shaderCheck;
+    private boolean shaderWarned;
+
+    /** Calls a no-argument static method of the Vulkan renderer's gate (null on OpenGL-only launches). */
+    private static Object vulkanGate(String method) {
+        try {
+            return Class.forName("com.clientm.vulkan.VulkanGate")
+                .getMethod(method)
+                .invoke(null);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static void chat(String text) {
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getMinecraft();
+        if (mc.thePlayer != null)
+            mc.thePlayer.addChatMessage(new net.minecraft.util.ChatComponentText("§cClientM §7» §f" + text));
+    }
+
+    /** On Vulkan, a shader pack picked in game only works after a restart (on OpenGL); say so once. */
+    private void checkShaderPack() {
+        if (shaderWarned || ++shaderCheck % 40 != 0) return;
+        if (!Boolean.TRUE.equals(vulkanGate("isEngaged")) || !Boolean.TRUE.equals(vulkanGate("shaderPackSelected")))
+            return;
+        shaderWarned = true;
+        chat(
+            "Shader packs need OpenGL. Restart the game: ClientM will start on OpenGL while a shader pack is selected.");
+    }
+
     /**
      * ClientM's best-performance values for Angelica, written once per game folder (a marker file remembers it, so
      * whatever the player changes afterwards is kept): no CPU render-ahead (Angelica's default of 3 lets the CPU run
@@ -194,10 +224,13 @@ public class ModuleManager {
             save();
         }
         if (Minecraft.getMinecraft().thePlayer == null) return;
+        checkShaderPack();
         if (!appliedOnJoin) {
             // Saved settings that reach into other mods are applied once the game is fully up.
             appliedOnJoin = true;
             applyTunedDefaults();
+            String reason = (String) vulkanGate("openGlReason");
+            if (reason != null) chat(reason);
             for (Module m : all) if (m.enabled) m.onSettingsChanged();
         }
         for (Module m : all) if (m.enabled || editing) m.onTick();

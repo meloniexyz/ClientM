@@ -12,6 +12,9 @@ public class FastParticlesModule extends Module {
 
     private static FastParticlesModule instance;
 
+    private final com.clientm.setting.BoolSetting critsSkipBlocks = add(
+        new com.clientm.setting.BoolSetting("critsSkipBlocks", "Crit particles skip block collision", true));
+
     public FastParticlesModule() {
         super("fastparticles", "Fast Particles", Category.PERFORMANCE, true);
         instance = this;
@@ -20,6 +23,12 @@ public class FastParticlesModule extends Module {
     @Override
     public String description() {
         return "Particles no longer search for boats and minecarts to bump into";
+    }
+
+    /** See MixinEntityCritFX_NoClip. */
+    public static boolean critsSkipBlocks() {
+        FastParticlesModule m = instance;
+        return m != null && m.enabled && m.critsSkipBlocks.value;
     }
 
     public static boolean active() {

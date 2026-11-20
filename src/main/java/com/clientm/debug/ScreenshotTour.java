@@ -365,7 +365,8 @@ public final class ScreenshotTour {
                 if (sounds) mc.theWorld.playSound(f.posX, f.posY, f.posZ, "game.player.hurt", 1f, 1f, false);
             }
         }
-        if (!fighters.isEmpty() && fightShot == 0 && secs > 3f) {
+        // Only on request: saving a screenshot takes a fraction of a second, which would show up in the numbers.
+        if (!fighters.isEmpty() && fightShot == 0 && secs > 3f && System.getenv("CLIENTM_FIGHT_SHOT") != null) {
             fightShot = 1;
             shot("fight-" + System.getenv("CLIENTM_BENCH_LABEL"));
         }

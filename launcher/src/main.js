@@ -171,7 +171,13 @@ ipcMain.handle('settings', (e, patch) => {
   const s = readSettings();
   if (typeof patch.heapGb === 'number') s.heapGb = Math.max(2, Math.min(8, Math.round(patch.heapGb)));
   if (typeof patch.azureClientId === 'string') s.azureClientId = patch.azureClientId.trim();
-  if (patch.renderer === 'vulkan' || patch.renderer === 'opengl') s.renderer = patch.renderer;
+  if (patch.renderer === 'vulkan' || patch.renderer === 'opengl') {
+    s.renderer = patch.renderer;
+    // Picking Vulkan again clears the note the game leaves after a Vulkan session that did not close properly.
+    if (patch.renderer === 'vulkan') {
+      fs.rmSync(path.join(root, 'game', 'config', 'clientm-vulkan-crashed.txt'), { force: true });
+    }
+  }
   writeSettings(s);
   return state();
 });

@@ -107,6 +107,7 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void shutdown() {
         VulkanDevice d = VulkanGate.device();
         if (d != null) d.destroy();
+        VulkanGate.markRunning(false); // closed properly: the next start may use Vulkan again
     }
 
     @Override
@@ -400,6 +401,8 @@ public final class VulkanRenderBackend extends RenderBackend {
     private static final boolean DEBUG_TEX = System.getenv("CLIENTM_VK_DEBUG_TEX") != null;
 
     private volatile GLResources res;
+    /** GL_PACK_ALIGNMENT: row alignment of pixels read back (screenshots set 1). */
+    private int packAlignment = 4;
 
     /** Created once; the loading screen's thread and the main thread both reach it at start-up. */
     private GLResources res() {
@@ -777,6 +780,9 @@ public final class VulkanRenderBackend extends RenderBackend {
                 break;
             case 0x0CF5:
                 r.ctx().unpackAlignment = param;
+                break;
+            case 0x0D05: // PACK_ALIGNMENT, for reading pixels back
+                packAlignment = param;
                 break;
             default:
                 break;
@@ -2146,22 +2152,57 @@ public final class VulkanRenderBackend extends RenderBackend {
     public void dispatchComputeIndirect(long offset) {}
 
     @Override
-    public void readPixels(int x, int y, int width, int height, int format, int type, ByteBuffer pixels) {}
+    public void readPixels(int x, int y, int width, int height, int format, int type, ByteBuffer pixels) {
+        if (pixels == null) return;
+        GLResources.Ctx c = res().ctx();
+        int[] level = new int[1];
+        VulkanImage img = rnd().readSource(c, level);
+        rnd().readImage(
+            img,
+            level[0],
+            x,
+            y,
+            width,
+            height,
+            format,
+            type,
+            org.lwjgl.system.MemoryUtil.memAddress(pixels),
+            packAlignment);
+    }
 
     @Override
     public void readPixels(int x, int y, int width, int height, int format, int type, FloatBuffer pixels) {}
 
     @Override
-    public void readPixels(int x, int y, int width, int height, int format, int type, IntBuffer pixels) {}
+    public void readPixels(int x, int y, int width, int height, int format, int type, IntBuffer pixels) {
+        if (pixels != null) readPixels(x, y, width, height, format, type, bytes(pixels));
+    }
 
     @Override
     public void readPixels(int x, int y, int width, int height, int format, int type, long pixelBufferOffset) {}
 
     @Override
-    public void getTexImage(int target, int level, int format, int type, ByteBuffer pixels) {}
+    public void getTexImage(int target, int level, int format, int type, ByteBuffer pixels) {
+        GLResources.GLTexture t = res().boundTexture();
+        if (t == null || t.image == null || pixels == null) return;
+        int w = Math.max(1, t.image.width >> level), h = Math.max(1, t.image.height >> level);
+        rnd().readImage(
+            t.image,
+            level,
+            0,
+            0,
+            w,
+            h,
+            format,
+            type,
+            org.lwjgl.system.MemoryUtil.memAddress(pixels),
+            packAlignment);
+    }
 
     @Override
-    public void getTexImage(int target, int level, int format, int type, IntBuffer pixels) {}
+    public void getTexImage(int target, int level, int format, int type, IntBuffer pixels) {
+        if (pixels != null) getTexImage(target, level, format, type, bytes(pixels));
+    }
 
     @Override
     public void getTexImage(int target, int level, int format, int type, long pixelBufferOffset) {}

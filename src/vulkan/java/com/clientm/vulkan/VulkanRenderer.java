@@ -1688,6 +1688,100 @@ final class VulkanRenderer {
         }
     }
 
+    // ------------------------------------------------------------------ reading pixels back (screenshots)
+
+    /**
+     * Copies a rectangle of a colour image to {@code dst} in OpenGL's layout: rows bottom-up, {@code glFormat} RGBA,
+     * BGRA, RGB or BGR with 8-bit channels (GL_UNSIGNED_BYTE or the packed 8_8_8_8(_REV) types), rows packed with the
+     * given alignment. Waits for the graphics card (used for screenshots, not per frame).
+     */
+    boolean readImage(VulkanImage img, int level, int x, int y, int w, int h, int glFormat, int glType, long dst,
+        int alignment) {
+        if (img == null || img.depth || w <= 0 || h <= 0 || dst == 0) return false;
+        int lw = Math.max(1, img.width >> level), lh = Math.max(1, img.height >> level);
+        x = clamp(x, 0, lw);
+        y = clamp(y, 0, lh);
+        w = Math.min(w, lw - x);
+        h = Math.min(h, lh - y);
+        if (w <= 0 || h <= 0) return false;
+        boolean bgr = glFormat == 0x80E1 || glFormat == 0x80E0; // BGRA, BGR
+        int outTexel = glFormat == 0x1907 || glFormat == 0x80E0 ? 3 : 4; // RGB, BGR
+        if (!(glFormat == 0x1908 || glFormat == 0x80E1 || glFormat == 0x1907 || glFormat == 0x80E0)) return false;
+        boolean reversed = glType == 0x8035; // UNSIGNED_INT_8_8_8_8 (not _REV): bytes come out as A,B,G,R
+        boolean bgraImage = img.format == VK_FORMAT_B8G8R8A8_UNORM;
+        if (img.format != VK_FORMAT_R8G8B8A8_UNORM && !bgraImage) return false;
+        // Rows of the image in memory: bottom-up for OpenGL's own images, top-down for the window-ordered ones.
+        int memY = img.topDown ? lh - (y + h) : y;
+        VulkanBuffer buffer;
+        synchronized (res.lock) {
+            endRendering();
+            res.flushUploads();
+            buffer = new VulkanBuffer(dev, (long) w * h * 4);
+            VkCommandBuffer cmd = dev.cmd();
+            Barriers.full(cmd);
+            try (MemoryStack stack = stackPush()) {
+                org.lwjgl.vulkan.VkBufferImageCopy.Buffer region = org.lwjgl.vulkan.VkBufferImageCopy.calloc(1, stack);
+                final int mip = level;
+                region.get(0)
+                    .imageSubresource(
+                        r -> r.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                            .mipLevel(mip)
+                            .layerCount(1));
+                region.get(0)
+                    .imageOffset()
+                    .set(x, memY, 0);
+                region.get(0)
+                    .imageExtent()
+                    .set(w, h, 1);
+                vkCmdCopyImageToBuffer(cmd, img.image, VK_IMAGE_LAYOUT_GENERAL, buffer.buffer, region);
+            }
+            Barriers.full(cmd);
+            dev.flushAndWait();
+        }
+        try {
+            long rowOut = (long) w * outTexel;
+            if (alignment > 1) rowOut = (rowOut + alignment - 1) / alignment * alignment;
+            for (int row = 0; row < h; row++) {
+                // OpenGL row 'row' (counted from the bottom of the rectangle)
+                int srcRow = img.topDown ? h - 1 - row : row;
+                long src = buffer.address + (long) srcRow * w * 4;
+                long out = dst + row * rowOut;
+                for (int i = 0; i < w; i++) {
+                    int p = MemoryUtil.memGetInt(src + i * 4L); // bytes in image order
+                    int c0 = p & 0xFF, c1 = (p >> 8) & 0xFF, c2 = (p >> 16) & 0xFF, a = (p >>> 24);
+                    int r = bgraImage ? c2 : c0, g = c1, b = bgraImage ? c0 : c2;
+                    long o = out + (long) i * outTexel;
+                    int first = bgr ? b : r, third = bgr ? r : b;
+                    if (outTexel == 4 && reversed) {
+                        MemoryUtil.memPutByte(o, (byte) a);
+                        MemoryUtil.memPutByte(o + 1, (byte) third);
+                        MemoryUtil.memPutByte(o + 2, (byte) g);
+                        MemoryUtil.memPutByte(o + 3, (byte) first);
+                    } else {
+                        MemoryUtil.memPutByte(o, (byte) first);
+                        MemoryUtil.memPutByte(o + 1, (byte) g);
+                        MemoryUtil.memPutByte(o + 2, (byte) third);
+                        if (outTexel == 4) MemoryUtil.memPutByte(o + 3, (byte) a);
+                    }
+                }
+            }
+        } finally {
+            buffer.release(dev);
+        }
+        return true;
+    }
+
+    /** The colour image glReadPixels reads: the read framebuffer's read buffer (the screen for framebuffer 0). */
+    VulkanImage readSource(GLResources.Ctx c, int[] level) {
+        synchronized (res.lock) {
+            if (c.readFramebuffer == 0 && screenSource != null) {
+                level[0] = 0;
+                return screenSource;
+            }
+            return readColor(c.readFramebuffer, level);
+        }
+    }
+
     /** Frees a renderbuffer's image when it is deleted or re-sized. */
     void releaseRenderbuffer(Renderbuffer rb) {
         if (rb != null && rb.image != null) synchronized (res.lock) {

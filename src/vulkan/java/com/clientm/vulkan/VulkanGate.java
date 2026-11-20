@@ -46,9 +46,23 @@ public final class VulkanGate {
                     java.nio.charset.StandardCharsets.UTF_8).trim();
             } catch (Throwable ignored) {}
         }
-        if (value == null || value.isEmpty()) return true;
-        String v = value.toLowerCase(Locale.ROOT);
-        return !(v.startsWith("opengl") || v.equals("gl"));
+        boolean explicit = System.getProperty("clientm.renderer") != null || System.getenv("CLIENTM_RENDERER") != null;
+        if (value != null && !value.isEmpty()) {
+            String v = value.toLowerCase(Locale.ROOT);
+            if (v.startsWith("opengl") || v.equals("gl")) return false;
+        }
+        if (!explicit && shaderPackSelected()) {
+            LOG.info("A shader pack is selected: shader packs need OpenGL, so this start uses OpenGL");
+            reason = "A shader pack is selected, and shader packs need OpenGL: this start uses OpenGL.";
+            return false;
+        }
+        if (!explicit && crashedLastTime()) {
+            LOG.warn("The Vulkan renderer did not shut down properly last time: this start uses OpenGL");
+            reason = "ClientM's Vulkan renderer did not close properly last time, so this start uses OpenGL. "
+                + "Pick Vulkan in the launcher to try it again.";
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -66,6 +80,80 @@ public final class VulkanGate {
     public static void screenCopyDone() {
         Object backend = com.gtnewhorizons.angelica.glsm.backend.BackendManager.RENDER_BACKEND;
         if (backend instanceof VulkanRenderBackend) ((VulkanRenderBackend) backend).screenCopyDone();
+    }
+
+    /** Why this start uses OpenGL although Vulkan is the default (shown in chat once in game), or null. */
+    private static volatile String reason;
+
+    public static String openGlReason() {
+        return reason;
+    }
+
+    private static final java.io.File SHADERS = new java.io.File("config/shaders.properties");
+    /** Exists while the Vulkan renderer runs; left behind when the game did not close properly. */
+    private static final java.io.File RUNNING = new java.io.File("config/.clientm-vulkan-running");
+    /** Written after such a start; Vulkan stays off until the player picks it again (the launcher removes it). */
+    private static final java.io.File CRASHED = new java.io.File("config/clientm-vulkan-crashed.txt");
+
+    /** Angelica's shader settings name an active shader pack (they use OpenGL features Vulkan does not cover). */
+    private static long shadersStamp = Long.MIN_VALUE;
+    private static boolean shadersSelected;
+
+    public static boolean shaderPackSelected() {
+        // The game asks every couple of seconds: the file is only read again when it changed.
+        long stamp = SHADERS.lastModified();
+        if (stamp == shadersStamp) return shadersSelected;
+        shadersStamp = stamp;
+        shadersSelected = readShaderPackSelected();
+        return shadersSelected;
+    }
+
+    private static boolean readShaderPackSelected() {
+        if (!SHADERS.isFile()) return false;
+        java.util.Properties p = new java.util.Properties();
+        try (java.io.Reader in = new java.io.InputStreamReader(
+            new java.io.FileInputStream(SHADERS),
+            java.nio.charset.StandardCharsets.UTF_8)) {
+            p.load(in);
+        } catch (Throwable t) {
+            return false;
+        }
+        String pack = p.getProperty("shaderPack", "")
+            .trim();
+        return !"false".equalsIgnoreCase(
+            p.getProperty("enableShaders", "true")
+                .trim())
+            && !pack.isEmpty()
+            && !pack.equals("(off)");
+    }
+
+    private static boolean crashedLastTime() {
+        if (RUNNING.exists()) {
+            RUNNING.delete();
+            try {
+                CRASHED.getParentFile()
+                    .mkdirs();
+                java.nio.file.Files.write(
+                    CRASHED.toPath(),
+                    ("The Vulkan renderer did not close properly last time, so ClientM uses OpenGL.\n"
+                        + "Pick Vulkan in the ClientM launcher, or delete this file, to use Vulkan again.\n")
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (Throwable ignored) {}
+        }
+        return CRASHED.exists();
+    }
+
+    /** Called once Vulkan has the window, and again when it shuts down properly. */
+    static void markRunning(boolean running) {
+        try {
+            if (running) {
+                RUNNING.getParentFile()
+                    .mkdirs();
+                java.nio.file.Files.write(RUNNING.toPath(), new byte[0]);
+            } else {
+                RUNNING.delete();
+            }
+        } catch (Throwable ignored) {}
     }
 
     /** True once the window belongs to Vulkan; the backend reports itself available only then. */
@@ -104,6 +192,7 @@ public final class VulkanGate {
         }
         if (engaged && failure == null) {
             installDrawable();
+            markRunning(true);
             LOG.info("Created the game window for Vulkan");
             return true;
         }
