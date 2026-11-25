@@ -70,6 +70,8 @@
   .primary { background: var(--accent); color: var(--ink); font-weight: 700; border-radius: 10px; padding: 8px 16px; }
   input { width: 100%; background: var(--row); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; color: var(--text); font: 13px Consolas, monospace; margin-bottom: 12px; outline: none; }
   input:focus { border-color: var(--accent); }
+  .dialog p.pwerr { color: var(--accent); min-height: 0; margin: -4px 0 10px; }
+  .dialog p.pwerr:empty { display: none; }
 </style>
 </head>
 <body>
@@ -135,8 +137,25 @@
       <p>Play uses the highlighted account. In the game you can also switch on the main menu.</p>
       <div class="acclist" id="accList"></div>
       <div class="rowbtn">
+        <button class="ghost" id="accImport" title="Add accounts from a ClientM account file">Import</button>
+        <button class="ghost" id="accExport" title="Save these accounts to a password-protected file">Export</button>
+        <span style="flex:1"></span>
         <button class="ghost" id="accClose">Close</button>
         <button class="primary" id="accAdd">Add account</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="pwDlg">
+    <div class="dialog">
+      <h3 id="pwTitle">Export accounts</h3>
+      <p id="pwText"></p>
+      <input id="pw1" type="password" placeholder="Password" autocomplete="new-password">
+      <input id="pw2" type="password" placeholder="Password again" autocomplete="new-password">
+      <p id="pwErr" class="pwerr"></p>
+      <div class="rowbtn">
+        <button class="ghost" id="pwCancel">Cancel</button>
+        <button class="primary" id="pwOk">Export</button>
       </div>
     </div>
   </div>

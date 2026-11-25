@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, shell, safeStorage, nativeImage, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, safeStorage, nativeImage, session, dialog } = require('electron');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const auth = require('./auth');
@@ -204,6 +205,106 @@ ipcMain.handle('login', async () => {
 ipcMain.handle('login-cancel', () => {
   loginCancelled = true;
   closeSignInWindow();
+});
+
+// ---------------------------------------------------------------- account files (export / import)
+
+// An exported account file holds each account's name and Microsoft sign-in (refresh) token, which is enough to play
+// on that account. So it is always encrypted with a password the user picks: AES-256-GCM with a key made from the
+// password by scrypt. Without the password the file is useless; with a wrong one the import fails cleanly.
+const ACCOUNT_FILE_FORMAT = 'clientm-accounts';
+const ACCOUNT_FILE_EXT = 'cmacc';
+const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+function passwordKey(password, salt) {
+  return crypto.scryptSync(String(password).normalize('NFC'), salt, 32, SCRYPT);
+}
+
+ipcMain.handle('export-accounts', async (e, password) => {
+  if (typeof password !== 'string' || password.length < 6) throw new Error('Use a password of at least 6 characters.');
+  const d = readAccounts();
+  if (!d.list.length) throw new Error('There are no accounts to export.');
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Export accounts',
+    defaultPath: path.join(app.getPath('documents'), 'clientm-accounts.' + ACCOUNT_FILE_EXT),
+    filters: [{ name: 'ClientM accounts', extensions: [ACCOUNT_FILE_EXT] }],
+  });
+  if (canceled || !filePath) return { saved: false };
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', passwordKey(password, salt), iv);
+  const plain = JSON.stringify({
+    list: d.list.map((a) => ({ name: a.name, uuid: a.uuid, refreshToken: a.refreshToken })),
+  });
+  const data = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      format: ACCOUNT_FILE_FORMAT,
+      version: 1,
+      kdf: 'scrypt',
+      salt: salt.toString('base64'),
+      iv: iv.toString('base64'),
+      tag: cipher.getAuthTag().toString('base64'),
+      data: data.toString('base64'),
+    }),
+  );
+  return { saved: true, count: d.list.length };
+});
+
+let pendingImport = null;
+
+/** Picks an account file to import; the password is asked next (import-accounts). */
+ipcMain.handle('import-accounts-pick', async () => {
+  pendingImport = null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Import accounts',
+    properties: ['openFile'],
+    filters: [{ name: 'ClientM accounts', extensions: [ACCOUNT_FILE_EXT] }],
+  });
+  if (canceled || !filePaths || !filePaths[0]) return { picked: false };
+  let f;
+  try {
+    f = JSON.parse(fs.readFileSync(filePaths[0], 'utf8'));
+  } catch (err) {
+    throw new Error('That is not a ClientM account file.');
+  }
+  if (!f || f.format !== ACCOUNT_FILE_FORMAT || f.version !== 1) throw new Error('That is not a ClientM account file.');
+  pendingImport = f;
+  return { picked: true, name: path.basename(filePaths[0]) };
+});
+
+ipcMain.handle('import-accounts', (e, password) => {
+  const f = pendingImport;
+  if (!f) throw new Error('Pick an account file first.');
+  let list;
+  try {
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      passwordKey(password, Buffer.from(f.salt, 'base64')),
+      Buffer.from(f.iv, 'base64'),
+    );
+    decipher.setAuthTag(Buffer.from(f.tag, 'base64'));
+    const plain = Buffer.concat([decipher.update(Buffer.from(f.data, 'base64')), decipher.final()]).toString('utf8');
+    list = JSON.parse(plain).list;
+  } catch (err) {
+    throw new Error('Wrong password, or the file is damaged.');
+  }
+  const valid = (Array.isArray(list) ? list : []).filter(
+    (a) =>
+      a &&
+      typeof a.name === 'string' &&
+      /^[0-9a-f]{32}$/i.test(String(a.uuid)) &&
+      typeof a.refreshToken === 'string' &&
+      a.refreshToken.length > 0,
+  );
+  if (!valid.length) throw new Error('The file has no accounts in it.');
+  const hadActive = !!readAccounts().active;
+  valid.forEach((a, i) =>
+    saveAccount({ name: a.name, uuid: a.uuid.toLowerCase(), refreshToken: a.refreshToken }, !hadActive && i === 0),
+  );
+  pendingImport = null;
+  return { count: valid.length, state: state() };
 });
 
 ipcMain.handle('switch-account', (e, uuid) => {

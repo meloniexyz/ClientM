@@ -88,6 +88,74 @@ $('accAdd').onclick = () => {
   signIn();
 };
 
+// ---- account files: export / import, always with a password (see export-accounts in main.js)
+let pwMode = null;
+
+function openPassword(mode, fileName) {
+  pwMode = mode;
+  const exporting = mode === 'export';
+  $('pwTitle').textContent = exporting ? 'Export accounts' : 'Import accounts';
+  $('pwText').textContent = exporting
+    ? "The file holds your accounts' sign-ins: anyone with the file and this password can play on them. Pick a password (6+ characters) and keep the file private."
+    : 'Enter the password ' + (fileName ? 'of ' + fileName : 'the file was exported with') + '.';
+  $('pw2').style.display = exporting ? '' : 'none';
+  $('pw1').value = '';
+  $('pw2').value = '';
+  $('pwErr').textContent = '';
+  $('pwOk').textContent = exporting ? 'Export' : 'Import';
+  $('accDlg').classList.remove('show');
+  $('pwDlg').classList.add('show');
+  $('pw1').focus();
+}
+
+function closePassword() {
+  $('pwDlg').classList.remove('show');
+  $('pw1').value = '';
+  $('pw2').value = '';
+  pwMode = null;
+}
+
+$('accExport').onclick = () => {
+  if (!(st.accounts || []).length) return status('There are no accounts to export.', true);
+  openPassword('export');
+};
+
+$('accImport').onclick = async () => {
+  try {
+    const r = await api.pickImport();
+    if (r.picked) openPassword('import', r.name);
+  } catch (e) {
+    status(message(e), true);
+  }
+};
+
+$('pwCancel').onclick = closePassword;
+$('pw2').onkeydown = $('pw1').onkeydown = (ev) => {
+  if (ev.key === 'Enter') $('pwOk').onclick();
+};
+
+$('pwOk').onclick = async () => {
+  const pw = $('pw1').value;
+  $('pwErr').textContent = '';
+  try {
+    if (pwMode === 'export') {
+      if (pw.length < 6) return ($('pwErr').textContent = 'Use at least 6 characters.');
+      if (pw !== $('pw2').value) return ($('pwErr').textContent = 'The passwords are not the same.');
+      const r = await api.exportAccounts(pw);
+      closePassword();
+      if (r.saved) status('Exported ' + r.count + (r.count === 1 ? ' account.' : ' accounts.'));
+    } else {
+      const r = await api.importAccounts(pw);
+      closePassword();
+      st = r.state;
+      render();
+      status('Imported ' + r.count + (r.count === 1 ? ' account.' : ' accounts.'));
+    }
+  } catch (e) {
+    $('pwErr').textContent = message(e);
+  }
+};
+
 async function signIn() {
   if (!st.clientIdSet) return $('settingsBtn').onclick();
   $('loginCode').textContent = '········';

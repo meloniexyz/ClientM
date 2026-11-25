@@ -251,7 +251,6 @@ public class ModuleManager {
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
-        com.clientm.module.impl.HitFixModule.tickEnd();
         boolean vsync = Minecraft.getMinecraft().gameSettings.enableVsync;
         if (appliedVsync == null || appliedVsync != vsync) {
             appliedVsync = vsync;
