@@ -33,10 +33,10 @@ import com.clientm.setting.Setting;
 public class ClientScreen extends GuiScreen {
 
     // ClientM's colours: black, the red accent and the purple of the presets
-    private static final int GLASS = 0xD80E0E12;
+    private static final int GLASS = 0xF20B0B0E;
     private static final int EDGE = 0x1CFFFFFF;
     private static final int SPLIT = 0x12FFFFFF;
-    private static final int TILE = 0x0DFFFFFF;
+    private static final int TILE = 0xFF15151B;
     private static final int TILE_EDGE = 0x12FFFFFF;
     private static final int HOVER = 0x14FFFFFF;
     private static final int ROW_BG = 0x09FFFFFF;
@@ -200,9 +200,23 @@ public class ClientScreen extends GuiScreen {
         }
     }
 
+    /**
+     * A rounded box with a one-pixel border. The border is drawn as thin edges, not as a filled shape under the fill,
+     * so a see-through fill does not show the border colour through it.
+     */
     private static void outlined(int x, int y, int w, int h, int r, int edge, int fill) {
-        round(x, y, w, h, r, edge);
         round(x + 1, y + 1, w - 2, h - 2, Math.max(1, r - 1), fill);
+        Gui.drawRect(x + r, y, x + w - r, y + 1, edge);
+        Gui.drawRect(x + r, y + h - 1, x + w - r, y + h, edge);
+        Gui.drawRect(x, y + r, x + 1, y + h - r, edge);
+        Gui.drawRect(x + w - 1, y + r, x + w, y + h - r, edge);
+        if (r > 1) {
+            // corner pixels
+            Gui.drawRect(x + 1, y + 1, x + 2, y + 2, edge);
+            Gui.drawRect(x + w - 2, y + 1, x + w - 1, y + 2, edge);
+            Gui.drawRect(x + 1, y + h - 2, x + 2, y + h - 1, edge);
+            Gui.drawRect(x + w - 2, y + h - 2, x + w - 1, y + h - 1, edge);
+        }
     }
 
     private static void toggle(int x, int y, boolean on) {
@@ -389,7 +403,7 @@ public class ClientScreen extends GuiScreen {
         int w = Math.min(120, mw / 2);
         int x = mx + mw - w;
         int y = sy + 10;
-        outlined(x, y, w, 15, 3, searchFocus ? PURPLE : TILE_EDGE, searchFocus ? 0xFF16161C : 0xFF121217);
+        outlined(x, y, w, 15, 3, searchFocus ? PURPLE : 0x30FFFFFF, searchFocus ? 0xFF1C1C24 : 0xFF17171D);
         boolean blink = searchFocus && (System.currentTimeMillis() / 500) % 2 == 0;
         if (search.isEmpty() && !searchFocus) text("Search mods...", x + 7, y + 4, TEXT_3);
         else text(f.trim(search, w - 16) + (blink ? "_" : ""), x + 7, y + 4, TEXT);
@@ -418,7 +432,7 @@ public class ClientScreen extends GuiScreen {
             if (y + TILE_H < gridY || y > gridY + gridH) continue;
             boolean hover = inGrid && in(mouseX, mouseY, x, y, tileW, TILE_H);
             boolean sel = m == selected;
-            outlined(x, y, tileW, TILE_H, 3, sel ? PURPLE : hover ? 0x30FFFFFF : TILE_EDGE, hover ? 0x16FFFFFF : TILE);
+            outlined(x, y, tileW, TILE_H, 3, sel ? PURPLE : hover ? 0x30FFFFFF : TILE_EDGE, hover ? 0xFF1C1C24 : TILE);
             bold.draw(bold.trim(m.name, tileW - 14), x + 7, y + 7, TEXT);
             String d = m.description();
             if (d != null) text(f.trim(d, tileW - 14), x + 7, y + 18, TEXT_3);
@@ -505,7 +519,7 @@ public class ClientScreen extends GuiScreen {
             boolean on = presets[i] == PerformancePreset.last;
             boolean hover = in(mouseX, mouseY, mx, y, mw, 18);
             if (on) round(mx, y, mw, 18, 3, PURPLE);
-            else outlined(mx, y, mw, 18, 3, hover ? 0x30FFFFFF : TILE_EDGE, hover ? 0x16FFFFFF : TILE);
+            else outlined(mx, y, mw, 18, 3, hover ? 0x30FFFFFF : TILE_EDGE, hover ? 0xFF1C1C24 : TILE);
             bold.draw(presets[i].label, mx + 9, y + 6, on ? INK : TEXT);
         }
     }
