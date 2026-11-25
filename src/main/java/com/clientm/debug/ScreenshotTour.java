@@ -182,6 +182,147 @@ public final class ScreenshotTour {
     private final int[] frameNanos = new int[400000];
     private int frames;
 
+    // ---- CLIENTM_TOUR=dimswap: the "dimension swap" PotPvP servers use between duels (Nether and back several times,
+    // then every chunk sent again), then a count of terrain sections that are visible but never got built (holes).
+    private long swapStart;
+    private int swapStep;
+    private final StringBuilder swapReport = new StringBuilder();
+
+    @SubscribeEvent
+    public void onSwapTest(TickEvent.RenderTickEvent event) {
+        if (swapStart == 0 || event.phase != TickEvent.Phase.END || mc.thePlayer == null) return;
+        mc.inGameHasFocus = true;
+        if (mc.currentScreen != null && !(mc.currentScreen instanceof net.minecraft.client.gui.GuiDownloadTerrain))
+            mc.displayGuiScreen(null);
+        double secs = (System.nanoTime() - swapStart) / 1e9;
+        if (swapStep == 0 && secs > 4) {
+            swapStep = 1;
+            swapReport.append("before swap: ")
+                .append(holes())
+                .append('\n');
+            serverSwap();
+        } else if (swapStep == 1 && secs > 10) {
+            swapStep = 2;
+            swapReport.append("6 s after swap 1: ")
+                .append(holes())
+                .append('\n');
+            shot("dimswap-1");
+            serverSwap();
+        } else if (swapStep == 2 && secs > 16) {
+            swapStep = 3;
+            swapReport.append("6 s after swap 2: ")
+                .append(holes())
+                .append('\n');
+            shot("dimswap-2");
+            try {
+                java.nio.file.Files.write(
+                    new java.io.File(mc.mcDataDir, "clientm-dimswap.txt").toPath(),
+                    swapReport.toString()
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (java.io.IOException e) {
+                ClientM.LOG.error("Could not write the dimension swap result", e);
+            }
+            ClientM.LOG.info("Dimension swap test:\n{}", swapReport);
+            swapStart = 0;
+            mc.shutdown();
+        }
+    }
+
+    /** Sections within 3 chunks that have blocks and are visible to the terrain renderer but are not built. */
+    private String holes() {
+        Object m;
+        java.lang.reflect.Method built, visibleM;
+        try {
+            Object r = Class.forName("com.gtnewhorizons.angelica.rendering.celeritas.CeleritasWorldRenderer")
+                .getMethod("getInstanceOrNull")
+                .invoke(null);
+            if (r == null) return "no terrain renderer";
+            m = r.getClass()
+                .getMethod("getRenderSectionManager")
+                .invoke(r);
+            built = m.getClass()
+                .getMethod("isSectionBuilt", int.class, int.class, int.class);
+            visibleM = m.getClass()
+                .getMethod("isSectionVisible", int.class, int.class, int.class);
+        } catch (ReflectiveOperationException e) {
+            return "renderer not reachable: " + e;
+        }
+        int px = (int) Math.floor(mc.thePlayer.posX) >> 4, pz = (int) Math.floor(mc.thePlayer.posZ) >> 4;
+        int withBlocks = 0, visible = 0, missing = 0, unbuiltAny = 0, chunks = 0;
+        for (int cx = px - 3; cx <= px + 3; cx++) for (int cz = pz - 3; cz <= pz + 3; cz++) {
+            net.minecraft.world.chunk.Chunk c = mc.theWorld.getChunkFromChunkCoords(cx, cz);
+            if (c == null || c.isEmpty()) continue;
+            chunks++;
+            net.minecraft.world.chunk.storage.ExtendedBlockStorage[] st = c.getBlockStorageArray();
+            for (int sy = 0; sy < st.length; sy++) {
+                if (st[sy] == null || st[sy].isEmpty()) continue;
+                withBlocks++;
+                boolean isBuilt, isVisible;
+                try {
+                    isBuilt = (Boolean) built.invoke(m, cx, sy, cz);
+                    isVisible = (Boolean) visibleM.invoke(m, cx, sy, cz);
+                } catch (ReflectiveOperationException e) {
+                    return "renderer call failed: " + e;
+                }
+                if (!isBuilt) unbuiltAny++;
+                if (isVisible) {
+                    visible++;
+                    if (!isBuilt) missing++;
+                }
+            }
+        }
+        return String.format(
+            "%d chunks loaded, %d sections with blocks, %d visible, %d VISIBLE BUT NOT BUILT, %d not built in all",
+            chunks,
+            withBlocks,
+            visible,
+            missing,
+            unbuiltAny);
+    }
+
+    /** On the server thread: Nether, Overworld, Nether, Overworld... then position and every chunk sent again. */
+    private void serverSwap() {
+        net.minecraft.server.MinecraftServer server = mc.getIntegratedServer();
+        if (server == null) return;
+        final net.minecraft.entity.player.EntityPlayerMP p = (net.minecraft.entity.player.EntityPlayerMP) server
+            .getConfigurationManager().playerEntityList.get(0);
+        cpw.mods.fml.common.FMLCommonHandler.instance()
+            .bus()
+            .register(new SwapOnServer(p));
+    }
+
+    public static final class SwapOnServer {
+
+        private final net.minecraft.entity.player.EntityPlayerMP p;
+        private boolean done;
+
+        SwapOnServer(net.minecraft.entity.player.EntityPlayerMP p) {
+            this.p = p;
+        }
+
+        @SubscribeEvent
+        public void onServerTick(TickEvent.ServerTickEvent event) {
+            if (done || event.phase != TickEvent.Phase.END) return;
+            done = true;
+            net.minecraft.world.WorldServer w = p.getServerForPlayer();
+            for (int i = 0; i < 3; i++) {
+                for (int dim : new int[] { -1, 0 }) p.playerNetServerHandler.sendPacket(
+                    new net.minecraft.network.play.server.S07PacketRespawn(
+                        dim,
+                        w.difficultySetting,
+                        w.getWorldInfo()
+                            .getTerrainType(),
+                        p.theItemInWorldManager.getGameType()));
+            }
+            p.playerNetServerHandler.setPlayerLocation(p.posX, p.posY, p.posZ, p.rotationYaw, p.rotationPitch);
+            // The client has an empty world now: send every chunk around the player again.
+            w.getPlayerManager()
+                .removePlayer(p);
+            w.getPlayerManager()
+                .addPlayer(p);
+        }
+    }
+
     // ---- CLIENTM_TOUR=blur: motion blur at strength 10, standing still, spinning, then spinning with it off.
     private long blurStart, blurLast;
     private int blurShots;
@@ -928,6 +1069,15 @@ public final class ScreenshotTour {
         }
         if ("world".equals(System.getenv("CLIENTM_TOUR"))) {
             worldTest();
+            return;
+        }
+        if ("dimswap".equals(System.getenv("CLIENTM_TOUR"))) {
+            if (step++ > 0) return;
+            noonAndClear();
+            mc.gameSettings.pauseOnLostFocus = false;
+            if ("1".equals(System.getenv("CLIENTM_SWAP_HITFIX_OFF"))) module("hitfix").setEnabled(false);
+            if ("1".equals(System.getenv("CLIENTM_SWAP_LAZY_OFF"))) module("lazychunks").setEnabled(false);
+            swapStart = System.nanoTime();
             return;
         }
         if ("blur".equals(System.getenv("CLIENTM_TOUR"))) {

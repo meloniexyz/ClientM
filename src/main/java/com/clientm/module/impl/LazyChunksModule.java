@@ -16,8 +16,26 @@ import com.clientm.setting.ChoiceSetting;
 public class LazyChunksModule extends Module {
 
     private static final String CONFIG = "com.gtnewhorizons.angelica.config.AngelicaConfig";
-    /** Builder threads for each Loading speed choice; 0 lets Angelica pick (half the processor threads). */
-    private static final int[] THREADS = { 0, 3, 2, 1 };
+
+    /**
+     * Builder threads for each Loading speed choice; 0 lets Angelica pick (half the processor threads). Medium and Slow
+     * follow the processor: a fixed 3 builders on a 4-thread processor left the game too little time while terrain
+     * loaded, and on a 12+ thread processor 3 is no strain at all.
+     */
+    private static int threads(int speed) {
+        int cpus = Runtime.getRuntime()
+            .availableProcessors();
+        switch (speed) {
+            case 0:
+                return 0; // Fast: Angelica's own choice
+            case 1:
+                return cpus <= 4 ? 1 : cpus <= 8 ? 2 : 3; // Medium
+            case 2:
+                return cpus <= 8 ? 1 : 2; // Slow
+            default:
+                return 1; // Slowest
+        }
+    }
 
     private final ChoiceSetting speed = add(
         new ChoiceSetting("speed", "Loading speed", 1, "Fast", "Medium", "Slow", "Slowest"));
@@ -50,7 +68,7 @@ public class LazyChunksModule extends Module {
         if (!AngelicaBridge.available()) return;
         if (AngelicaBridge.set("performance", "alwaysDeferChunkUpdates", enabled)) AngelicaBridge.save();
         // This static setting is the one the chunk builder really reads; it applies when the renderer is rebuilt.
-        int threads = enabled ? THREADS[speed.value] : 0;
+        int threads = enabled ? threads(speed.value) : 0;
         if (AngelicaBridge.setStatic(CONFIG, "chunkBuilderThreadCount", threads) && mc.theWorld != null
             && mc.renderGlobal != null) mc.renderGlobal.loadRenderers();
     }

@@ -24,6 +24,20 @@ let loginCancelled = false;
 
 // ---------------------------------------------------------------- stored state
 
+// Memory for the game, by the PC's RAM: 3 GB normally, 2 GB on PCs with 8 GB or less (3 GB there, on top of Windows
+// and a browser, pushes memory to the page file and the game stutters). A value the player picks in Settings wins.
+const GB = 1024 * 1024 * 1024;
+function defaultHeapGb() {
+  return require('os').totalmem() <= 8.5 * GB ? 2 : manifest.defaultHeapGb;
+}
+
+// AlwaysPreTouch makes Java claim all of the game's memory up front (fewer hitches later). On PCs with little RAM that
+// costs more than it saves, so it is left out below 12 GB.
+function jvmFlags() {
+  const low = require('os').totalmem() < 12 * GB;
+  return manifest.jvmFlags.filter((f) => !(low && f === '-XX:+AlwaysPreTouch'));
+}
+
 function readSettings() {
   let s = {};
   try {
@@ -31,7 +45,7 @@ function readSettings() {
   } catch (e) {
     // defaults
   }
-  return { heapGb: manifest.defaultHeapGb, azureClientId: '', renderer: 'vulkan', ...s };
+  return { heapGb: defaultHeapGb(), azureClientId: '', renderer: 'vulkan', ...s };
 }
 
 function writeSettings(s) {
@@ -362,7 +376,7 @@ ipcMain.handle('play', async (e, opts) => {
   fs.mkdirSync(path.join(inst.gameDir, 'config'), { recursive: true });
   fs.writeFileSync(path.join(inst.gameDir, 'config', 'clientm-renderer.txt'), s.renderer + '\n');
   send('progress', { text: 'Starting Minecraft', fraction: 1 });
-  game = launch(inst, session, { heapGb: s.heapGb, jvmFlags: manifest.jvmFlags, env });
+  game = launch(inst, session, { heapGb: s.heapGb, jvmFlags: jvmFlags(), env });
   game.on('exit', (code) => {
     game = null;
     if (env.CLIENTM_ACCOUNTS) fs.rmSync(env.CLIENTM_ACCOUNTS, { force: true });
