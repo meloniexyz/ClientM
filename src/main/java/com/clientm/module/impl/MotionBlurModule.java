@@ -5,6 +5,7 @@ import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.shader.Framebuffer;
 
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL30;
 
 import com.clientm.ClientM;
@@ -31,6 +32,10 @@ public class MotionBlurModule extends Module {
     private final IntSetting strength = add(new IntSetting("strength", "Strength", 5, 1, 10));
 
     private static final long STEP_NS = 1_000_000_000L / 240;
+    /** Debug (CLIENTM_BLUR_DEBUG=1): show only the trail image, to see whether each step draws. */
+    private static final boolean DEBUG_TRAIL_ONLY = "1".equals(System.getenv("CLIENTM_BLUR_DEBUG"));
+    /** Debug (CLIENTM_BLUR_DEBUG=2): show only the copy of the current frame. */
+    private static final boolean DEBUG_COPY_ONLY = "2".equals(System.getenv("CLIENTM_BLUR_DEBUG"));
     /** After a longer gap (a pause, a loading screen) the trail starts again instead of smearing old frames in. */
     private static final long RESTART_NS = 250_000_000L;
 
@@ -38,6 +43,8 @@ public class MotionBlurModule extends Module {
     private int trailTex, trailFbo, copyTex, copyFbo;
     private long lastStep;
     private boolean fresh = true, failed, logged;
+    private int creates, applies;
+    private long applyNs;
 
     public MotionBlurModule() {
         super("motionblur", "Motion Blur", Category.VISUAL, false);
@@ -81,7 +88,16 @@ public class MotionBlurModule extends Module {
             release();
             create(fw, fh);
             fresh = true;
+            if (++creates <= 3) ClientM.LOG
+                .info("Motion blur images {}x{}: trail {}/{} copy {}/{}", fw, fh, trailTex, trailFbo, copyTex, copyFbo);
+            if (trailFbo == 0 || copyFbo == 0 || creates > 20) {
+                failed = true;
+                release();
+                ClientM.LOG.warn("Motion blur switched off: its images could not be made");
+                return;
+            }
         }
+        long t0 = System.nanoTime();
         long now = System.nanoTime();
         long elapsed = now - lastStep;
         if (fresh || elapsed > RESTART_NS) {
@@ -102,9 +118,15 @@ public class MotionBlurModule extends Module {
             lastStep = now;
         }
         // Show the trail over the current frame.
-        float show = (float) Math.exp(-STEP_NS / tau);
-        draw(main.framebufferObject, trailTex, show, true);
+        float show = DEBUG_TRAIL_ONLY ? 1f : (float) Math.exp(-STEP_NS / tau);
+        if (DEBUG_COPY_ONLY) {
+            copy(main.framebufferObject);
+            draw(main.framebufferObject, copyTex, 1f, false);
+        } else draw(main.framebufferObject, trailTex, show, true);
         main.bindFramebuffer(true);
+        applyNs += System.nanoTime() - t0;
+        if (++applies == 5000)
+            ClientM.LOG.info("Motion blur costs {} us a frame (processor side)", applyNs / 5000 / 1000);
         if (!logged) {
             logged = true;
             ClientM.LOG.info("Motion blur is active ({}x{})", fw, fh);
@@ -119,8 +141,14 @@ public class MotionBlurModule extends Module {
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
     }
 
-    /** Draws a texture over a whole framebuffer, blended with the given weight (or replacing it). */
-    private void draw(int fbo, int texture, float alpha, boolean blend) {
+    /**
+     * Draws a texture over a whole framebuffer: blended with the given weight, or replacing it. The weight is a
+     * constant
+     * blend colour, not an alpha from the images: Minecraft leaves the frame's alpha channel mostly empty (zero over
+     * the
+     * sky), and weighting by it kept old frames stuck there as ghosts. The target's alpha is left as it is.
+     */
+    private void draw(int fbo, int texture, float weight, boolean blend) {
         GL11.glPushAttrib(
             GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT
                 | GL11.GL_DEPTH_BUFFER_BIT
@@ -145,19 +173,26 @@ public class MotionBlurModule extends Module {
         GL11.glEnable(GL11.GL_TEXTURE_2D);
         if (blend) {
             GL11.glEnable(GL11.GL_BLEND);
-            OpenGlHelper.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
+            GL14.glBlendColor(0f, 0f, 0f, weight);
+            GL14.glBlendFuncSeparate(
+                GL11.GL_CONSTANT_ALPHA,
+                GL11.GL_ONE_MINUS_CONSTANT_ALPHA,
+                GL11.GL_ZERO,
+                GL11.GL_ONE);
         } else {
             GL11.glDisable(GL11.GL_BLEND);
         }
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
-        GL11.glColor4f(1f, 1f, 1f, alpha);
+        GL11.glColor4f(1f, 1f, 1f, 1f);
         Tessellator t = Tessellator.instance;
         t.startDrawingQuads();
+        t.setColorRGBA_F(1f, 1f, 1f, 1f);
         t.addVertexWithUV(0, 0, 0, 0, 0);
         t.addVertexWithUV(1, 0, 0, 1, 0);
         t.addVertexWithUV(1, 1, 0, 1, 1);
         t.addVertexWithUV(0, 1, 0, 0, 1);
         t.draw();
+        if (blend) GL14.glBlendColor(0f, 0f, 0f, 0f);
         GL11.glMatrixMode(GL11.GL_PROJECTION);
         GL11.glPopMatrix();
         GL11.glMatrixMode(GL11.GL_MODELVIEW);
