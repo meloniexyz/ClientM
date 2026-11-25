@@ -252,6 +252,7 @@ public class ModuleManager {
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
+        com.clientm.render.ChunkSafetyNet.tick();
         boolean vsync = Minecraft.getMinecraft().gameSettings.enableVsync;
         if (appliedVsync == null || appliedVsync != vsync) {
             appliedVsync = vsync;

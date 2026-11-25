@@ -29,6 +29,7 @@
     "MixinEntityRenderer_Zoom",
     "MixinGuiNewChat_Chat",
     "MixinEntityRenderer_MotionBlur",
+    "MixinNetHandlerPlayClient_Respawn",
     "AccessorMinecraft_Session",
     "MixinEntityRenderer_HurtCam17",
     "MixinResourcePackRepository_Folders",
