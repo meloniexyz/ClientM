@@ -182,6 +182,42 @@ public final class ScreenshotTour {
     private final int[] frameNanos = new int[400000];
     private int frames;
 
+    // ---- CLIENTM_TOUR=blur: motion blur at strength 10, standing still, spinning, then spinning with it off.
+    private long blurStart, blurLast;
+    private int blurShots;
+
+    @SubscribeEvent
+    public void onBlurTest(TickEvent.RenderTickEvent event) {
+        if (blurStart == 0 || event.phase != TickEvent.Phase.START || mc.thePlayer == null) return;
+        mc.inGameHasFocus = true;
+        if (mc.currentScreen != null) mc.displayGuiScreen(null);
+        long now = System.nanoTime();
+        double secs = (now - blurStart) / 1e9;
+        double dt = blurLast == 0 ? 0 : (now - blurLast) / 1e9;
+        blurLast = now;
+        if (secs > 3 && secs < 7.5) {
+            // Spin the camera at 300 degrees a second.
+            mc.thePlayer.rotationYaw += (float) (300 * dt);
+            mc.thePlayer.prevRotationYaw = mc.thePlayer.rotationYaw;
+        }
+        if (blurShots == 0 && secs > 2.5) {
+            blurShots++;
+            shot("blur-1-still");
+        } else if (blurShots == 1 && secs > 4.5) {
+            blurShots++;
+            shot("blur-2-moving");
+        } else if (blurShots == 2 && secs > 5) {
+            blurShots++;
+            module("motionblur").setEnabled(false);
+        } else if (blurShots == 3 && secs > 6.5) {
+            blurShots++;
+            shot("blur-3-moving-off");
+        } else if (blurShots == 4 && secs > 8) {
+            blurStart = 0;
+            mc.shutdown();
+        }
+    }
+
     // ---- CLIENTM_TOUR=features: hit marker (attacking real mobs), zoom, Ping & TPS and the custom crosshair.
     private long featureStart, lastAttack, featureQuitAt;
     private double homeX, homeY, homeZ;
@@ -892,6 +928,17 @@ public final class ScreenshotTour {
         }
         if ("world".equals(System.getenv("CLIENTM_TOUR"))) {
             worldTest();
+            return;
+        }
+        if ("blur".equals(System.getenv("CLIENTM_TOUR"))) {
+            if (step++ > 0) return;
+            noonAndClear();
+            mc.gameSettings.pauseOnLostFocus = false;
+            Module m = module("motionblur");
+            m.setEnabled(true);
+            for (com.clientm.setting.Setting st : m.settings)
+                if (st.id.equals("strength")) ((com.clientm.setting.IntSetting) st).set(10);
+            blurStart = System.nanoTime();
             return;
         }
         if ("chat".equals(System.getenv("CLIENTM_TOUR"))) {

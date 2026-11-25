@@ -28,6 +28,7 @@
     "MixinPlayerControllerMP_HitMarker",
     "MixinEntityRenderer_Zoom",
     "MixinGuiNewChat_Chat",
+    "MixinEntityRenderer_MotionBlur",
     "AccessorMinecraft_Session",
     "MixinEntityRenderer_HurtCam17",
     "MixinResourcePackRepository_Folders",
